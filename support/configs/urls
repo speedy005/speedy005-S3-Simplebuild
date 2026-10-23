@@ -1,2 +1,4 @@
-   s3url="https://github.com/speedy005/speedy005-S3-Simplebuild.git";
-trunkurl="https://git.streamboard.tv/common/oscam.git"
+s3url="https://github.com/speedy005/speedy005-S3-Simplebuild.git";
+trunkurl="https://github.com/speedy005/oscam-git"
+emuurl="https://github.com/oscam-mirror/oscam-emu-patch.git";
+
