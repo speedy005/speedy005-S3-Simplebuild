@@ -1,65 +1,98 @@
+
 #!/bin/bash
 
 update_me(){
-	clear;s3logo
+	clear
+	s3logo
+
 	printf "  s3_git CHECK:\n  -------------\n"
 	local_revision=0
 	online_revision=0
+
 	check_url "$s3url" || return
 
-	if [ ! -d $workdir/.git ]; then
+	if [ ! -d "$workdir/.git" ]; then
 		s3local="$dldir/s3_github"
 
-		local_revision=$(gitrevision $s3local)
-		online_revision=$(gitrevision $s3url)
+		local_revision=$(gitrevision "$s3local")
+		online_revision=$(gitrevision "$s3url")
 
-		if [ ! "$local_revision" == "$online_revision" ]
-		then
-			printf "  update s3_git\n  Local revision: $local_revision\n Online revision: $online_revision\n"
-			rm -rf "$s3local"; git clone "$s3url" "$s3local" &>/dev/null; cd "$s3local"
-			printf "  updating all files ...\n\n"
-			yes | cp -rf ./s3 "$workdir/s3"
-			yes | cp -rf ./support/* "$workdir/support"
+		if [ "$local_revision" != "$online_revision" ]; then
+			printf "  update s3_git\n"
+			printf "  Local revision: %s\n" "$local_revision"
+			printf "  Online revision: %s\n" "$online_revision"
+
+			echo
+			echo "Kein Git-Repository im Arbeitsverzeichnis gefunden."
+			echo "Aus Sicherheitsgründen werden keine Dateien überschrieben."
+			echo "Bitte aktualisiere dieses Verzeichnis separat."
 		else
-			printf "  is up to date\n   Online revision: $online_revision\n\n"
+			printf "  is up to date\n"
+			printf "  Online revision: %s\n\n" "$online_revision"
 		fi
-	
-    else
-        logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
 
-        (
-            cd "$workdir" || exit 1
+	else
+		logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
 
-            echo "S3 Speedy005 Update-Check"
-            echo "========================"
+		(
+			cd "$workdir" || exit 1
 
-            git fetch speedy005 master || {
-                echo "FEHLER: Speedy005 konnte nicht abgerufen werden."
-                exit 1
-            }
+			echo "S3 Speedy005 Update-Check"
+			echo "========================"
 
-            local_commit=$(git rev-parse --short HEAD)
-            online_commit=$(git rev-parse --short speedy005/master)
+			# Passenden Remote anhand der URL ermitteln
+			remote=""
 
-            echo "Lokaler Commit: $local_commit"
-            echo "Speedy005-Commit: $online_commit"
-            echo
+			for candidate in speedy005 origin; do
+				remote_url=$(git remote get-url "$candidate" 2>/dev/null) || continue
 
-            if git diff --quiet HEAD speedy005/master; then
-                echo "Die versionierten Dateien stimmen mit Speedy005 überein."
-            else
-                echo "UPDATE VERFÜGBAR oder Dateien unterscheiden sich."
-                echo
-                echo "Änderungen zwischen lokalem Stand und Speedy005:"
-                git diff --stat HEAD speedy005/master
-                echo
-                echo "Lokale Änderungen im Arbeitsverzeichnis:"
-                git status --short
-                echo
-                echo "Es wurden keine Dateien überschrieben."
-            fi
-        ) 2>&1 | _log "$logfile"
-    fi
+				if [[ "$remote_url" == *"speedy005-S3-Simplebuild"* ]]; then
+					remote="$candidate"
+					break
+				fi
+			done
+
+			if [ -z "$remote" ]; then
+				echo "FEHLER: Kein Speedy005-Remote gefunden."
+				echo "Vorhandene Remotes:"
+				git remote -v
+				exit 1
+			fi
+
+			echo "Verwendeter Remote: $remote"
+			echo
+
+			# Remote-Stand abrufen, ohne Arbeitsdateien zu überschreiben
+			if ! git fetch "$remote" master; then
+				echo "FEHLER: Speedy005 konnte nicht abgerufen werden."
+				exit 1
+			fi
+
+			remote_ref="$remote/master"
+
+			local_commit=$(git rev-parse --short HEAD) || exit 1
+			online_commit=$(git rev-parse --short "$remote_ref") || exit 1
+
+			echo
+			echo "Lokaler Commit: $local_commit"
+			echo "Speedy005-Commit: $online_commit"
+			echo
+
+			if git diff --quiet HEAD "$remote_ref"; then
+				echo "Die versionierten Dateien stimmen mit Speedy005 überein."
+			else
+				echo "UPDATE VERFÜGBAR oder Dateien unterscheiden sich."
+				echo
+				echo "Änderungen zwischen lokalem Stand und Speedy005:"
+				git diff --stat HEAD "$remote_ref"
+				echo
+				echo "Lokale Änderungen im Arbeitsverzeichnis:"
+				git status --short
+				echo
+				echo "Es wurden keine Dateien überschrieben."
+			fi
+		) 2>&1 | _log "$logfile"
+	fi
 
 	sleep 2
 }
@@ -69,6 +102,9 @@ fix_me(){
 	s3logo
 	s3local="$dldir/s3_github"
 
-	[ -d "$s3local" ] && rm -rf $s3local
+	if [ -d "$s3local" ]; then
+		rm -rf -- "$s3local"
+	fi
+
 	update_me
 }
