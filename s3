@@ -1,434 +1,1250 @@
 #!/bin/bash
+#
+# Simplebuild3 - main launcher
+# Version: 2026.03
+#
+# Developer:
+#   Gorgone, WXbet
+#
+# This file is the main dispatcher.
+# The actual build functions are loaded from:
+#   support/functions/
+#   support/software/
+#
 
 SIMPLEVERSION="2026.03"
-VERSIONCOUNTER="$(git rev-list --count HEAD 2>/dev/null || printf "$(echo "$SIMPLEVERSION" | sed -e 's/\(.\)/\1\+0/g' | bc)_non-git")"
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    VERSIONCOUNTER="$(git rev-list --count HEAD 2>/dev/null || printf '%s_non-git' "$SIMPLEVERSION")"
+else
+    VERSIONCOUNTER="$(printf '%s' "$SIMPLEVERSION" | sed 's/\(.\)/\1+0/g' | bc 2>/dev/null || printf '%s_non-git' "$SIMPLEVERSION")"
+fi
+
 DEVELOPER="Gorgone, WXbet"
-OIFS=$IFS
+
+OIFS="$IFS"
+
 export NCURSES_NO_UTF8_ACS=1
 
-here_=$(pwd)
-realdir=$(readlink -f $0)
-cd "$(dirname $realdir)"
+###############################################################################
+# Locate Simplebuild
+###############################################################################
 
-#set dir_vars
-  workdir="$(pwd)"
-     sdir="$workdir/support"
-    osdir="$sdir/os"
-     ldir="$sdir/logs"
-     adir="$sdir/archive"
+here_="$(pwd)"
+
+realdir="$(readlink -f "$0" 2>/dev/null)"
+
+if [[ -z "$realdir" ]]; then
+    realdir="$0"
+fi
+
+cd "$(dirname "$realdir")" || exit 1
+
+###############################################################################
+# Directories
+###############################################################################
+
+workdir="$(pwd)"
+
+sdir="$workdir/support"
+osdir="$sdir/os"
+ldir="$sdir/logs"
+adir="$sdir/archive"
 configdir="$sdir/configs"
-     pdir="$sdir/patches"
-  profdir="$sdir/profiles"
-     bdir="$sdir/binaries"
-    sodir="$sdir/software"
-    dldir="$sdir/downloads"
-     fdir="$sdir/functions"
-  menudir="$sdir/menu_save"
-    brepo="$sdir/backup_repo"
-    tcdir="$sdir/toolchains"
-     tdir="$sdir/translation"
- tccfgdir="$sdir/toolchains.cfg"
+pdir="$sdir/patches"
+profdir="$sdir/profiles"
+bdir="$sdir/binaries"
+sodir="$sdir/software"
+dldir="$sdir/downloads"
+fdir="$sdir/functions"
+menudir="$sdir/menu_save"
+brepo="$sdir/backup_repo"
+tcdir="$sdir/toolchains"
+tdir="$sdir/translation"
+tccfgdir="$sdir/toolchains.cfg"
 
-# create folders
-mkdir -p "$tcdir/native/bin" 2>/dev/null
-mkdir -p $sdir/{archive,binaries,downloads,software,logs,patches,backup_repo,menu_save} 2>/dev/null
-[ -f $sdir/patches/no.patch ] && rm -f $sdir/patches/no.patch 2>/dev/null
+###############################################################################
+# Create directories
+###############################################################################
 
-# some migrations of deprecated directories
+mkdir -p \
+    "$tcdir/native/bin" \
+    "$sdir/archive" \
+    "$sdir/binaries" \
+    "$sdir/downloads" \
+    "$sdir/software" \
+    "$sdir/logs" \
+    "$sdir/patches" \
+    "$sdir/backup_repo" \
+    "$sdir/menu_save" \
+    "$sdir/configs" \
+    "$sdir/profiles" \
+    "$sdir/functions" \
+    "$sdir/translation" \
+    "$sdir/toolchains" \
+    "$sdir/os" \
+    2>/dev/null
+
+if [[ -f "$pdir/no.patch" ]]; then
+    rm -f "$pdir/no.patch" 2>/dev/null
+fi
+
+###############################################################################
+# Migration of deprecated directories
+###############################################################################
+
 for migdir in backup_svn backup_git
 do
-	if [ -d "$sdir/$migdir" ]; then
-		mv -f "$sdir/$migdir"/{*,.*} "$brepo/" 2>/dev/null
-		mv "$brepo/last.tar.gz" "$brepo/last${migdir: -3}.tar.gz" 2>/dev/null
-		ln -fs "$(readlink "$brepo/last${migdir: -3}.tar.gz" | awk -F'/' '{ print $NF }')" "$brepo/last${migdir: -3}.tar.gz"
-		rm -d "$sdir/$migdir"
-	fi
+    if [[ -d "$sdir/$migdir" ]]; then
+
+        mkdir -p "$brepo"
+
+        shopt -s dotglob nullglob
+
+        files=("$sdir/$migdir"/*)
+
+        if (( ${#files[@]} > 0 )); then
+            mv -f "${files[@]}" "$brepo/" 2>/dev/null
+        fi
+
+        shopt -u dotglob nullglob
+
+        if [[ -f "$brepo/last.tar.gz" ]]; then
+
+            suffix="${migdir: -3}"
+
+            mv -f \
+                "$brepo/last.tar.gz" \
+                "$brepo/last${suffix}.tar.gz" \
+                2>/dev/null
+
+            if [[ -f "$brepo/last${suffix}.tar.gz" ]]; then
+                ln -sfn \
+                    "$(basename "$brepo/last${suffix}.tar.gz")" \
+                    "$brepo/last${suffix}.tar.gz" \
+                    2>/dev/null
+            fi
+        fi
+
+        rmdir "$sdir/$migdir" 2>/dev/null
+    fi
 done
 
-# create links
-[ ! -d "$ldir" ] && clear && echo -e "\n folder creation error\n\n" && exit
-[ -L "$workdir/logs" ]     || ln -frs "$ldir" "$workdir/logs"     2>/dev/null
-[ -L "$workdir/archive" ]  || ln -frs "$adir" "$workdir/archive"  2>/dev/null
-[ -L "$workdir/patches" ]  || ln -frs "$pdir" "$workdir/patches"  2>/dev/null
-[ -L "$workdir/binaries" ] || ln -frs "$bdir" "$workdir/binaries" 2>/dev/null
-[ -L "$workdir/software" ] || ln -frs "$sodir" "$workdir/software" 2>/dev/null
-[ -L "$workdir/profiles" ] || ln -frs "$profdir" "$workdir/profiles" 2>/dev/null
+###############################################################################
+# Create convenience links
+###############################################################################
 
-#set arrays
-array_names_a=( SHORT_PROTOCOLS SHORT_READERS SHORT_CARD_READERS AVAI_TCLIST
-		MISS_TCLIST SHORT_ADDONS DISABLED_MODULES SHORT_MODULENAMES
-		ALL_MODULES_LONG  ENABLED_MODULES INST_TCLIST SSH_CONF_CONTENT )
-array_names_A=( INTERNAL_MODULES USE_vars USE_vars_disable s3cfg_vars )
+if [[ ! -d "$ldir" ]]; then
+    clear 2>/dev/null
+    printf '\n folder creation error\n\n'
+    exit 1
+fi
+
+[[ -L "$workdir/logs" ]] ||
+    ln -frs "$ldir" "$workdir/logs" 2>/dev/null
+
+[[ -L "$workdir/archive" ]] ||
+    ln -frs "$adir" "$workdir/archive" 2>/dev/null
+
+[[ -L "$workdir/patches" ]] ||
+    ln -frs "$pdir" "$workdir/patches" 2>/dev/null
+
+[[ -L "$workdir/binaries" ]] ||
+    ln -frs "$bdir" "$workdir/binaries" 2>/dev/null
+
+[[ -L "$workdir/software" ]] ||
+    ln -frs "$sodir" "$workdir/software" 2>/dev/null
+
+[[ -L "$workdir/profiles" ]] ||
+    ln -frs "$profdir" "$workdir/profiles" 2>/dev/null
+
+###############################################################################
+# Arrays
+###############################################################################
+
+array_names_a=(
+    SHORT_PROTOCOLS
+    SHORT_READERS
+    SHORT_CARD_READERS
+    AVAI_TCLIST
+    MISS_TCLIST
+    SHORT_ADDONS
+    DISABLED_MODULES
+    SHORT_MODULENAMES
+    ALL_MODULES_LONG
+    ENABLED_MODULES
+    INST_TCLIST
+    SSH_CONF_CONTENT
+)
+
+array_names_A=(
+    INTERNAL_MODULES
+    USE_vars
+    USE_vars_disable
+    s3cfg_vars
+)
 
 for a_n in "${array_names_a[@]}"
 do
-	unset $a_n
-	declare -a $a_n
+    unset "$a_n" 2>/dev/null
+    declare -a "$a_n"
 done
 
 for a_n in "${array_names_A[@]}"
 do
-	unset $a_n
-	declare -A $a_n
+    unset "$a_n" 2>/dev/null
+    declare -A "$a_n"
 done
 
-USE_vars[USE_DIAG]=;
-USE_vars[USE_TARGZ]=;
-USE_vars[USE_PATCH]=;
-USE_vars[USE_STAPI]=;
-USE_vars[USE_STAPI5]=;
-USE_vars[USE_CONFDIR]=;
-USE_vars[USE_EXTRA]=;
-USE_vars[USE_STATIC]=;
-USE_vars[STATIC_LIBCRYPTO]=;
-USE_vars[STATIC_SSL]=;
-USE_vars[STATIC_LIBUSB]=;
-USE_vars[STATIC_PCSC]=;
-USE_vars[STATIC_LIBDVBCSA]=;
-USE_vars[USE_OSCAMNAME]=;
+###############################################################################
+# Build variables
+###############################################################################
+
+USE_vars[USE_DIAG]=""
+USE_vars[USE_TARGZ]=""
+USE_vars[USE_PATCH]=""
+USE_vars[USE_STAPI]=""
+USE_vars[USE_STAPI5]=""
+USE_vars[USE_CONFDIR]=""
+USE_vars[USE_EXTRA]=""
+USE_vars[USE_STATIC]=""
+USE_vars[STATIC_LIBCRYPTO]=""
+USE_vars[STATIC_SSL]=""
+USE_vars[STATIC_LIBUSB]=""
+USE_vars[STATIC_PCSC]=""
+USE_vars[STATIC_LIBDVBCSA]=""
+USE_vars[USE_OSCAMNAME]=""
+
+###############################################################################
+# Simplebuild configuration defaults
+###############################################################################
 
 s3cfg_vars[USE_TARGZ]=0
 s3cfg_vars[DIRECTMENU]=0
 s3cfg_vars[NO_REPO_AUTOUPDATE]=0
 s3cfg_vars[USE_VERBOSE]=0
 s3cfg_vars[S3_UPDATE_CHECK]=1
-s3cfg_vars[S3_URL_CHECK]=1
+
+# URL check timeout in seconds
+s3cfg_vars[S3_URL_CHECK]=10
+
 s3cfg_vars[INSTALL_NATIVE_LIBDVBCSA]=1
 s3cfg_vars[PATCH_WEBIF]=1
 s3cfg_vars[SAVE_LISTSMARGO]=1
 s3cfg_vars[ADD_PROFILE_NAME]=0
-s3cfg_vars[NO_REPO_AUTOUPDATE]=0
 s3cfg_vars[delete_oscamdebugbinary]=1
 s3cfg_vars[POSTBUILD_QEMU_TEST]=0
 s3cfg_vars[POSTBUILD_QEMU_TIMEOUT]=5
 s3cfg_vars[POSTBUILD_QEMU_PARAM]=""
 s3cfg_vars[POSTBUILD_QEMU_EXPECT]="Server running"
 
-#filled arrays
-config_cases=( all addons protocols readers card_readers );
-s3opts=( cedit checkout clean fix_me get_patch help lang_select loadonly\
-	menu profiles ssh_profiles repoclean repopatch reporestore repoup syscheck sysinfo tccheck\
-	tcrepair tedit update update_me upload version ) # extendable with plugins
+###############################################################################
+# Configuration cases and commands
+###############################################################################
+
+config_cases=(
+    all
+    addons
+    protocols
+    readers
+    card_readers
+)
+
+s3opts=(
+    cedit
+    checkout
+    clean
+    fix_me
+    get_patch
+    help
+    lang_select
+    loadonly
+    menu
+    profiles
+    ssh_profiles
+    repoclean
+    repopatch
+    reporestore
+    repoup
+    syscheck
+    sysinfo
+    tccheck
+    tcrepair
+    tedit
+    update
+    update_me
+    upload
+    upload_cam
+    version
+)
 
 CUSTOM_CONFDIR="not_set"
 pf_name="not_set"
 
-#internal vars
+###############################################################################
+# Internal variables
+###############################################################################
+
 OPENBOX=0
 UFS916003=0
+
 _t1e="VG9vbGNoYWluLQ=="
 
 run="0"
 cposx=0
 cposy=0
+
 on="_on"
 off="_off"
+
 pf="empty"
+
 _verbose=""
 menucall="no"
 file_exist="0"
 loadprofile="no"
+
 s3cfg="$configdir/simplebuild.config"
 
+###############################################################################
 # Compiler settings
-cc_warn="-W -Wall -Wshadow -Wstrict-prototypes -Wold-style-definition"
-#compiling options for minimize cpu load
-cc_opts="-ggdb -pipe -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-schedule-insns"
-#compiling options for compatibility
-#cc_opts="-ggdb -pipe -ffunction-sections -fdata-sections -o nodeadcode"
-#compiling options for optimizing
-#cc_opts="-ggdb -pipe -ffunction-sections -fdata-sections -o nodeadcode -ffast-math -fomit-frame-pointer -fthread-jumps -foptimize-strlen --no-inline"
+###############################################################################
 
-#load default urls
+cc_warn="-W -Wall -Wshadow -Wstrict-prototypes -Wold-style-definition"
+
+cc_opts="-ggdb -pipe -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-schedule-insns"
+
+###############################################################################
+# Load default URLs
+###############################################################################
+
+if [[ ! -f "$configdir/urls" ]]; then
+    printf 'ERROR: missing URL configuration:\n  %s\n' \
+        "$configdir/urls" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
 source "$configdir/urls"
 
-#load custom urls
-[ -f "$workdir/oscamsource.url" ] && source "$workdir/oscamsource.url"
+###############################################################################
+# Load custom URLs
+###############################################################################
 
-# switch trunkurl based on environment variable SOURCE
-# needs an existing oscamsource.url file containing trunkurl<SOURCE>="some url"
-# e.q. to force s3 to use trunkurlsvn which was defined in oscamsource.url, simply run: SOURCE=svn ./s3 menu
-forcedurl="trunkurl$SOURCE"
-[ -v trunkurl$SOURCE ] && trunkurl="${!forcedurl}" || unset SOURCE
+if [[ -f "$workdir/oscamsource.url" ]]; then
+    # Remove CR characters from custom URL file if it was created on Windows.
+    sed -i 's/\r$//' "$workdir/oscamsource.url" 2>/dev/null
 
-#load translationlist
-cd "$tdir"
-langsupport=(*)
-
-#load functions and plugins
-if [ -d "$fdir" ]
-then
-	cd "$fdir"
-	x=(*)
-	for i in "${x[@]}"
-	do
-		source "$i"
-		plugin=$(awk '/^#simplebuild_plugin/ {printf $2}' $i)
-		[ -z "$plugin" ] || s3opts+=($plugin)
-	done
-else
-	echo "fail functions"
+    # shellcheck disable=SC1090
+    source "$workdir/oscamsource.url"
 fi
 
-#set additional dir_vars
+###############################################################################
+# Select repository URL through SOURCE
+#
+# Example:
+#   SOURCE=svn ./s3 menu
+#
+# expects:
+#   trunkurlsvn="..."
+###############################################################################
+
+if [[ -n "${SOURCE:-}" ]]; then
+
+    forcedurl="trunkurl${SOURCE}"
+
+    if [[ -v "$forcedurl" ]]; then
+        trunkurl="${!forcedurl}"
+    else
+        unset SOURCE
+    fi
+fi
+
+###############################################################################
+# Translation list
+###############################################################################
+
+if [[ -d "$tdir" ]]; then
+    cd "$tdir" || exit 1
+
+    shopt -s nullglob
+    langsupport=(*)
+    shopt -u nullglob
+else
+    langsupport=()
+fi
+
+###############################################################################
+# Load functions and plugins
+###############################################################################
+
+if [[ -d "$fdir" ]]; then
+
+    cd "$fdir" || exit 1
+
+    shopt -s nullglob
+    function_files=(*)
+    shopt -u nullglob
+
+    for i in "${function_files[@]}"
+    do
+
+        [[ -f "$i" ]] || continue
+
+        # shellcheck disable=SC1090
+        source "$i"
+
+        plugin="$(
+            awk '/^#simplebuild_plugin/ {print $2; exit}' "$i" 2>/dev/null
+        )"
+
+        if [[ -n "$plugin" ]]; then
+            s3opts+=("$plugin")
+        fi
+    done
+
+else
+    echo "fail functions"
+fi
+
+###############################################################################
+# IMPORTANT:
+# Robust URL checker.
+#
+# This overrides an old/broken check_url() implementation from an older
+# function file and fixes:
+#
+#   curl: (3) URL rejected: Malformed input to a URL function
+#
+###############################################################################
+
+check_url()
+{
+    local url="${1:-}"
+    local timeout="${s3cfg_vars[S3_URL_CHECK]:-10}"
+    local http_code="000"
+    local curl_exit=0
+    local curl_output=""
+
+    # Remove CR/LF.
+    url="${url//$'\r'/}"
+    url="${url//$'\n'/}"
+
+    # Trim whitespace.
+    url="${url#"${url%%[![:space:]]*}"}"
+    url="${url%"${url##*[![:space:]]}"}"
+
+    # Empty URL.
+    if [[ -z "$url" ]]; then
+        printf '%sURL is empty!%s\n' \
+            "${r_l:-}" \
+            "${re_:-}"
+        return 1
+    fi
+
+    # SSH Git URL - curl is not appropriate here.
+    if [[ "$url" == git@* ]]; then
+        return 0
+    fi
+
+    # HTTP/HTTPS only.
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        printf '%sInvalid URL: %s%s\n' \
+            "${r_l:-}" \
+            "$url" \
+            "${re_:-}"
+        return 1
+    fi
+
+    # Make timeout safe.
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        timeout=10
+    fi
+
+    # 0 disables URL checking.
+    if (( timeout <= 0 )); then
+        return 0
+    fi
+
+    curl_output="$(
+        curl \
+            --silent \
+            --show-error \
+            --location \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            --connect-timeout "$timeout" \
+            --max-time "$((timeout + 5))" \
+            "$url" \
+            2>&1
+    )"
+
+    curl_exit=$?
+
+    if (( curl_exit != 0 )); then
+
+        if [[ "$curl_output" =~ ^[0-9]{3}$ ]]; then
+            http_code="$curl_output"
+            curl_output=""
+        else
+            http_code="000"
+        fi
+
+        printf '%s%s is not reachable! (HTTP status: %s, curl exit: %s)%s\n' \
+            "${r_l:-}" \
+            "$url" \
+            "$http_code" \
+            "$curl_exit" \
+            "${re_:-}"
+
+        if [[ -n "$curl_output" ]]; then
+            printf '%s%s%s\n' \
+                "${r_l:-}" \
+                "$curl_output" \
+                "${re_:-}"
+        fi
+
+        return 1
+    fi
+
+    http_code="$curl_output"
+
+    # 2xx = success
+    # 3xx = reachable after redirect
+    # 401 = server reachable, authentication required
+    case "$http_code" in
+        2*|3*|401)
+            return 0
+            ;;
+        *)
+            printf '%s%s is not reachable! (HTTP status: %s, curl exit: 0)%s\n' \
+                "${r_l:-}" \
+                "$url" \
+                "$http_code" \
+                "${re_:-}"
+            return 1
+            ;;
+    esac
+}
+
+###############################################################################
+# Additional directory variables
+###############################################################################
+
 REPO="$(REPOTYPE)"
-ID="$(echo "$(REPOIDENT)" | tr ' ' '-')"
+
+ID="$(REPOIDENT | tr ' ' '-')"
+
 repodir="$workdir/oscam-${REPO}${ID}"
+
 ispatched="$workdir/${REPO^^}${ID}-IS-PATCHED"
 
-#software build support
-if [ -d "$sodir" ]
-then
-	cd "$sodir"
-	x=(*)
-	for i in "${x[@]}"
-	do
-		if [ -f "$i" ]; then
-			source "$i"
-			plugin=$(awk '/^#simplebuild_plugin/ {printf $2}' $i)
-			[ -z "$plugin" ] || s3opts+=($plugin)
-		fi
-	done
+###############################################################################
+# Software build support
+###############################################################################
+
+if [[ -d "$sodir" ]]; then
+
+    cd "$sodir" || exit 1
+
+    shopt -s nullglob
+    software_files=(*)
+    shopt -u nullglob
+
+    for i in "${software_files[@]}"
+    do
+
+        [[ -f "$i" ]] || continue
+
+        # shellcheck disable=SC1090
+        source "$i"
+
+        plugin="$(
+            awk '/^#simplebuild_plugin/ {print $2; exit}' "$i" 2>/dev/null
+        )"
+
+        if [[ -n "$plugin" ]]; then
+            s3opts+=("$plugin")
+        fi
+    done
 fi
 
-#initialize simplebuild
-initializeANSI	# load colors
-auto_langset	# echo "info $txt_load_ok";
-read_s3cfg		# read simplebuild config
+###############################################################################
+# Initialize Simplebuild
+###############################################################################
 
-# check system #########################################################
-syscheck
-[ ! "$sanity" == "1" ] && echo "sanity fail" && sleep 5 && bye
-########################################################################
-
-_create_native_profile	# put native datas to toolchains and configs
-_get_config_con "$1"	# echo $addons;exit;
-_create_module_arrays	# fill module arrays
-_fill_tc_array		# get # AVAI_TCLIST # INST_TCLIST # MISS_TCLIST
-_set_dialog_types	# fill $gui vars
-_systype		# check used uname
-
-if [ -z "$1" ]
-then
-	[ "${s3cfg_vars[DIRECTMENU]}" == "1" ] && _dialog_checkout && exit
-	_help
-	exit
-
-else
-	for e in "${s3opts[@]}"
-	do
-
-		if [ "$e" == "$1" ]
-		then
-
-			case $e in
-
-			fix_me|checkout|update_me|reporestore|upload_cam)
-				if [ ! -n "$2" ]
-				then
-					eval "$e"
-				else
-					eval "$e" "$2"
-				fi
-				exit;;
-
-			menu)
-				if [ ! -n "$2" ]
-				then
-					_dialog_checkout
-				else
-					_dialog_checkout "$2"
-				fi;;
-
-			loadonly)
-				if [ ! -n "$2" ]
-				then
-					_nl
-					clear
-					s3logo
-					echo -e "$r_l\n  $txt_error: toolchain $txt_parameter $txt_missing\n""$w_l"
-					_help_toolchain
-					sleep 2
-					exit
-				else
-					for t in "${AVAI_TCLIST[@]}"
-					do
-						_tmp="$2"
-						[ "$t" == "$2" ] && _load_toolchain "$2" && break
-					done
-					if [ -f "$tc_dl" ]
-					then
-						echo -e "$p_l\n\n  toolchain for $_tmp loaded\n"
-					else
-						_nl
-						clear
-						s3logo
-						printf "$r_l  toolchain missing/error\n"
-					fi
-					exit
-				fi;;
-
-			tccheck)
-				if [ ! -n "$2" ]
-				then
-					_nl
-					clear
-					s3logo
-					printf "$r_l\n  $txt_error: toolchain $txt_parameter $txt_missing\n""$w_l"
-					_help_toolchain
-					printf "$W"
-					sleep 2
-					exit
-				else
-					for t in "${AVAI_TCLIST[@]}"
-					do
-						[ "$t" == "$2" ] && _toolchain_check "$2" && break
-					done
-					_nl
-					clear
-					s3logo
-					printf "$r_l\n  toolchain missing/error\n$w_l"
-					_help_toolchain
-					echo -e "$W"
-					sleep 2
-					exit
-				fi;;
-
-			tcrepair)
-				if [ ! -n "$2" ];then
-					_nl
-					clear
-					s3logo
-					printf "$r_l\n  $txt_error: toolchain $txt_parameter $txt_missing\n""$w_l"
-					_help_toolchain
-					printf "$W"
-					sleep 2
-					exit
-				else
-					_nl
-					clear
-					_toolchain_repair "$2"
-					sleep 2
-					exit
-				fi;;
-
-			upload)
-				if [ ! -n "$2" ]
-				then
-					_nl
-					clear
-					s3logo
-					echo -e "$r_l\n  $txt_error: $txt_parameter $txt_missing""$w_l"
-					menucall="yes"
-					ssh_profiles
-				else
-					upload_cam "$2"
-				fi
-				exit;;
-
-			syscheck)
-				syscheck silent $2
-				exit;;
-
-			tedit)
-				if [ -n "$2" ]
-				then
-					for telement in ${INST_TCLIST[@]}
-					do
-						if [ "$telement" == "$2" ]
-						then
-							tedit $2
-							exit
-						fi
-					done
-					clear
-					s3logo
-					printf "$w_l\n  $2 toolchain not installed\n"$W
-				fi
-				exit;;
-
-			help)
-				_help
-				exit;;
-
-			*)
-				shift && eval "$e" "$@"; #Remove the first command line argument and pass the remaining ones to the plugin
-				exit;;
-			esac
-
-		fi
-	done
-
-	for t in "${AVAI_TCLIST[@]}"
-	do
-
-		if [ "$t" == "$1" ]
-		then
-
-			[ "${2:0:4}" == "here" ] && EXTRA_COPY_DIR=1 || EXTRA_COPY_DIR=0
-
-			if [ "${2:0:3}" == "-p=" ] || [ "${2:0:3}" == "-P=" ]
-			then
-				if [ -f "$profdir/${2#*=}" ]
-				then
-					pf=$(cat "$profdir/${2#*=}")
-					pf_name="${2#*=}"
-				fi
-			fi
-
-			if [ "${3:0:3}" == "-p=" ] || [ "${3:0:3}" == "-P=" ]
-			then
-				if [ -f "$profdir/${2#*=}" ]
-				then
-					pf=$(cat "$profdir/${2#*=}")
-					pf_name="${2#*=}"
-				fi
-			fi
-
-			[ "$pf" == "empty" ] && c_m_d="$*" || c_m_d="all_off $pf $*"; # set only active module with profiles
-			for cmd in $c_m_d
-			do
-
-				if [ "${cmd:0:3}" == "-c=" ] || [ "${cmd:0:3}" == "-C=" ]
-				then
-					CUSTOM_CONFDIR="${cmd#*=}"
-				fi
-
-				if [ "${cmd:0:11}" == "-oscamname=" ]
-				then
-					USE_vars[USE_OSCAMNAME]="USE_OSCAMNAME=${cmd#*=}"
-				fi
-
-				for cc in "${config_cases[@]}"
-				do
-					[ "$cmd" == "$cc$on" ]  && all_cc+=($cc$on) && break
-					[ "$cmd" == "$cc$off" ] && all_cc+=($cc$off) && break
-				done
-
-				for sm in "${SHORT_MODULENAMES[@]}"
-				do
-					[ "$cmd" == "$sm" ]     && all_cc+=($(get_module_name "$sm")$on) && break
-					[ "$cmd" == "$sm$off" ] && all_cc+=($(get_module_name "$sm")$off) && break
-				done
-
-				for uvar in "${!USE_vars[@]}"
-				do
-					[ "$cmd" == "$uvar" ]             && USE_vars[$uvar]="$uvar=1" && break
-					[ "$cmd" == "$uvar$off" ] && USE_vars_disable[$uvar]="$uvar=1" && break
-				done
-
-				case $cmd in
-					OPENBOX)  OPENBOX=1;;
-					UFS916003) UFS916003=1;;
-					USE_VERBOSE) s3cfg_vars[USE_VERBOSE]=1;;
-				esac
-
-			done
-			_pre_build "$t"
-			exit
-		fi
-
-	done
-	_help
+if declare -F initializeANSI >/dev/null 2>&1; then
+    initializeANSI
 fi
-exit
+
+if declare -F auto_langset >/dev/null 2>&1; then
+    auto_langset
+fi
+
+if declare -F read_s3cfg >/dev/null 2>&1; then
+    read_s3cfg
+fi
+
+###############################################################################
+# System check
+###############################################################################
+
+if declare -F syscheck >/dev/null 2>&1; then
+
+    syscheck
+
+    if [[ "${sanity:-0}" != "1" ]]; then
+        echo "sanity fail"
+        sleep 5
+        declare -F bye >/dev/null 2>&1 && bye
+        exit 1
+    fi
+fi
+
+###############################################################################
+# Build environment initialization
+###############################################################################
+
+declare -F _create_native_profile >/dev/null 2>&1 &&
+    _create_native_profile
+
+declare -F _get_config_con >/dev/null 2>&1 &&
+    _get_config_con "${1:-}"
+
+declare -F _create_module_arrays >/dev/null 2>&1 &&
+    _create_module_arrays
+
+declare -F _fill_tc_array >/dev/null 2>&1 &&
+    _fill_tc_array
+
+declare -F _set_dialog_types >/dev/null 2>&1 &&
+    _set_dialog_types
+
+declare -F _systype >/dev/null 2>&1 &&
+    _systype
+
+###############################################################################
+# No command -> help/menu
+###############################################################################
+
+if [[ -z "${1:-}" ]]; then
+
+    if [[ "${s3cfg_vars[DIRECTMENU]:-0}" == "1" ]]; then
+
+        if declare -F _dialog_checkout >/dev/null 2>&1; then
+            _dialog_checkout
+            exit $?
+        fi
+    fi
+
+    if declare -F _help >/dev/null 2>&1; then
+        _help
+    else
+        cat <<EOF
+
+Simplebuild3 ${SIMPLEVERSION}
+
+Usage:
+    ./s3 help
+    ./s3 menu
+    ./s3 sysinfo
+    ./s3 syscheck
+    ./s3 version
+    ./s3 clean
+
+EOF
+    fi
+
+    exit 0
+fi
+
+###############################################################################
+# Command dispatcher
+###############################################################################
+
+command="$1"
+
+###############################################################################
+# Simplebuild commands
+###############################################################################
+
+for e in "${s3opts[@]}"
+do
+
+    [[ "$e" == "$command" ]] || continue
+
+    case "$e" in
+
+        #######################################################################
+        # Commands accepting one optional argument
+        #######################################################################
+
+        fix_me|checkout|update_me|reporestore|upload_cam)
+
+            shift
+
+            if declare -F "$e" >/dev/null 2>&1; then
+                "$e" "$@"
+                exit $?
+            fi
+
+            printf 'ERROR: command not implemented: %s\n' "$e" >&2
+            exit 1
+            ;;
+
+        #######################################################################
+        # Menu
+        #######################################################################
+
+        menu)
+
+            if [[ -n "${2:-}" ]]; then
+
+                if declare -F _dialog_checkout >/dev/null 2>&1; then
+                    _dialog_checkout "$2"
+                    exit $?
+                fi
+
+            else
+
+                if declare -F _dialog_checkout >/dev/null 2>&1; then
+                    _dialog_checkout
+                    exit $?
+                fi
+
+            fi
+
+            printf 'ERROR: menu function not available\n' >&2
+            exit 1
+            ;;
+
+        #######################################################################
+        # Load toolchain only
+        #######################################################################
+
+        loadonly)
+
+            if [[ -z "${2:-}" ]]; then
+
+                declare -F _nl >/dev/null 2>&1 && _nl
+                clear 2>/dev/null
+
+                declare -F s3logo >/dev/null 2>&1 && s3logo
+
+                printf '%s\n' \
+                    "${r_l:-}  $txt_error: toolchain $txt_parameter $txt_missing${w_l:-}"
+
+                declare -F _help_toolchain >/dev/null 2>&1 &&
+                    _help_toolchain
+
+                sleep 2
+                exit 1
+            fi
+
+            _tmp="$2"
+
+            for t in "${AVAI_TCLIST[@]}"
+            do
+                if [[ "$t" == "$2" ]]; then
+
+                    if declare -F _load_toolchain >/dev/null 2>&1; then
+                        _load_toolchain "$2"
+                    fi
+
+                    break
+                fi
+            done
+
+            if [[ -n "${tc_dl:-}" && -f "$tc_dl" ]]; then
+
+                printf '%s\n' \
+                    "${p_l:-}  toolchain for $_tmp loaded"
+
+                exit 0
+
+            fi
+
+            declare -F _nl >/dev/null 2>&1 && _nl
+            clear 2>/dev/null
+
+            declare -F s3logo >/dev/null 2>&1 && s3logo
+
+            printf '%s\n' \
+                "${r_l:-}  toolchain missing/error"
+
+            exit 1
+            ;;
+
+        #######################################################################
+        # Toolchain check
+        #######################################################################
+
+        tccheck)
+
+            if [[ -z "${2:-}" ]]; then
+
+                declare -F _nl >/dev/null 2>&1 && _nl
+                clear 2>/dev/null
+
+                declare -F s3logo >/dev/null 2>&1 && s3logo
+
+                printf '%s\n' \
+                    "${r_l:-}  $txt_error: toolchain $txt_parameter $txt_missing${w_l:-}"
+
+                declare -F _help_toolchain >/dev/null 2>&1 &&
+                    _help_toolchain
+
+                sleep 2
+                exit 1
+            fi
+
+            found_tc=0
+
+            for t in "${AVAI_TCLIST[@]}"
+            do
+                if [[ "$t" == "$2" ]]; then
+                    found_tc=1
+
+                    if declare -F _toolchain_check >/dev/null 2>&1; then
+                        _toolchain_check "$2"
+                        rc=$?
+                    else
+                        rc=1
+                    fi
+
+                    exit "$rc"
+                fi
+            done
+
+            if (( found_tc == 0 )); then
+                printf '%s\n' \
+                    "${r_l:-}  toolchain '$2' not found"
+                exit 1
+            fi
+            ;;
+
+        #######################################################################
+        # Toolchain repair
+        #######################################################################
+
+        tcrepair)
+
+            if [[ -z "${2:-}" ]]; then
+
+                declare -F _nl >/dev/null 2>&1 && _nl
+                clear 2>/dev/null
+
+                declare -F s3logo >/dev/null 2>&1 && s3logo
+
+                printf '%s\n' \
+                    "${r_l:-}  $txt_error: toolchain $txt_parameter $txt_missing${w_l:-}"
+
+                declare -F _help_toolchain >/dev/null 2>&1 &&
+                    _help_toolchain
+
+                sleep 2
+                exit 1
+            fi
+
+            if declare -F _toolchain_repair >/dev/null 2>&1; then
+                _toolchain_repair "$2"
+                exit $?
+            fi
+
+            printf 'ERROR: _toolchain_repair() not available\n' >&2
+            exit 1
+            ;;
+
+        #######################################################################
+        # Upload
+        #######################################################################
+
+        upload)
+
+            if [[ -z "${2:-}" ]]; then
+
+                declare -F _nl >/dev/null 2>&1 && _nl
+                clear 2>/dev/null
+
+                declare -F s3logo >/dev/null 2>&1 && s3logo
+
+                printf '%s\n' \
+                    "${r_l:-}  $txt_error: $txt_parameter $txt_missing${w_l:-}"
+
+                menucall="yes"
+
+                if declare -F ssh_profiles >/dev/null 2>&1; then
+                    ssh_profiles
+                else
+                    printf 'ERROR: ssh_profiles() not available\n' >&2
+                    exit 1
+                fi
+
+            else
+
+                if declare -F upload_cam >/dev/null 2>&1; then
+                    upload_cam "$2"
+                else
+                    printf 'ERROR: upload_cam() not available\n' >&2
+                    exit 1
+                fi
+            fi
+
+            exit $?
+            ;;
+
+        #######################################################################
+        # System check
+        #######################################################################
+
+        syscheck)
+
+            if declare -F syscheck >/dev/null 2>&1; then
+
+                if [[ -n "${2:-}" ]]; then
+                    syscheck silent "$2"
+                else
+                    syscheck silent
+                fi
+
+                exit $?
+            fi
+
+            printf 'ERROR: syscheck() not available\n' >&2
+            exit 1
+            ;;
+
+        #######################################################################
+        # Toolchain editor
+        #######################################################################
+
+        tedit)
+
+            if [[ -z "${2:-}" ]]; then
+                exit 1
+            fi
+
+            for telement in "${INST_TCLIST[@]}"
+            do
+
+                if [[ "$telement" == "$2" ]]; then
+
+                    if declare -F tedit >/dev/null 2>&1; then
+                        tedit "$2"
+                        exit $?
+                    fi
+
+                    printf 'ERROR: tedit() not available\n' >&2
+                    exit 1
+                fi
+
+            done
+
+            clear 2>/dev/null
+
+            declare -F s3logo >/dev/null 2>&1 && s3logo
+
+            printf '%s\n' \
+                "${w_l:-}  $2 toolchain not installed${W:-}"
+
+            exit 1
+            ;;
+
+        #######################################################################
+        # Help
+        #######################################################################
+
+        help)
+
+            if declare -F _help >/dev/null 2>&1; then
+                _help
+                exit $?
+            fi
+
+            cat <<EOF
+
+Simplebuild3 ${SIMPLEVERSION}
+
+Usage:
+    ./s3 menu
+    ./s3 help
+    ./s3 version
+    ./s3 sysinfo
+    ./s3 syscheck
+    ./s3 clean
+
+EOF
+
+            exit 0
+            ;;
+
+        #######################################################################
+        # All other registered commands/plugins
+        #######################################################################
+
+        *)
+
+            shift
+
+            if declare -F "$e" >/dev/null 2>&1; then
+                "$e" "$@"
+                exit $?
+            fi
+
+            printf 'ERROR: command/function not available: %s\n' "$e" >&2
+            exit 1
+            ;;
+
+    esac
+
+done
+
+###############################################################################
+# Toolchain build command
+###############################################################################
+
+for t in "${AVAI_TCLIST[@]}"
+do
+
+    [[ "$t" == "$command" ]] || continue
+
+    TOOLCHAIN="$t"
+
+    ###########################################################################
+    # "here" option
+    ###########################################################################
+
+    if [[ "${2:-}" == here* ]]; then
+        EXTRA_COPY_DIR=1
+    else
+        EXTRA_COPY_DIR=0
+    fi
+
+    ###########################################################################
+    # Profile argument
+    #
+    # ./s3 TOOLCHAIN -p=profile
+    # ./s3 TOOLCHAIN -P=profile
+    ###########################################################################
+
+    if [[ "${2:-}" == -p=* || "${2:-}" == -P=* ]]; then
+
+        profile_name="${2#*=}"
+
+        if [[ -f "$profdir/$profile_name" ]]; then
+
+            pf="$(cat "$profdir/$profile_name")"
+            pf_name="$profile_name"
+
+        else
+
+            printf 'ERROR: profile not found: %s\n' \
+                "$profile_name" >&2
+
+            exit 1
+        fi
+    fi
+
+    ###########################################################################
+    # Third argument profile
+    #
+    # FIXED: original script incorrectly used $2 here.
+    ###########################################################################
+
+    if [[ "${3:-}" == -p=* || "${3:-}" == -P=* ]]; then
+
+        profile_name="${3#*=}"
+
+        if [[ -f "$profdir/$profile_name" ]]; then
+
+            pf="$(cat "$profdir/$profile_name")"
+            pf_name="$profile_name"
+
+        else
+
+            printf 'ERROR: profile not found: %s\n' \
+                "$profile_name" >&2
+
+            exit 1
+        fi
+    fi
+
+    ###########################################################################
+    # Build command line
+    ###########################################################################
+
+    if [[ "$pf" == "empty" ]]; then
+        c_m_d="$*"
+    else
+        c_m_d="all_off $pf $*"
+    fi
+
+    ###########################################################################
+    # Parse build options
+    ###########################################################################
+
+    all_cc=()
+
+    # shellcheck disable=SC2086
+    for cmd in $c_m_d
+    do
+
+        #######################################################################
+        # Custom configuration directory
+        #######################################################################
+
+        if [[ "${cmd:0:3}" == "-c=" || "${cmd:0:3}" == "-C=" ]]; then
+
+            CUSTOM_CONFDIR="${cmd#*=}"
+
+        fi
+
+        #######################################################################
+        # OSCam binary name
+        #######################################################################
+
+        if [[ "${cmd:0:11}" == "-oscamname=" ]]; then
+
+            USE_vars[USE_OSCAMNAME]="USE_OSCAMNAME=${cmd#*=}"
+
+        fi
+
+        #######################################################################
+        # Configuration cases
+        #######################################################################
+
+        for cc in "${config_cases[@]}"
+        do
+
+            if [[ "$cmd" == "$cc$on" ]]; then
+                all_cc+=("$cc$on")
+                break
+            fi
+
+            if [[ "$cmd" == "$cc$off" ]]; then
+                all_cc+=("$cc$off")
+                break
+            fi
+
+        done
+
+        #######################################################################
+        # Short module names
+        #######################################################################
+
+        for sm in "${SHORT_MODULENAMES[@]}"
+        do
+
+            if [[ "$cmd" == "$sm" ]]; then
+
+                module_name="$(
+                    get_module_name "$sm" 2>/dev/null
+                )"
+
+                [[ -n "$module_name" ]] &&
+                    all_cc+=("${module_name}${on}")
+
+                break
+            fi
+
+            if [[ "$cmd" == "$sm$off" ]]; then
+
+                module_name="$(
+                    get_module_name "$sm" 2>/dev/null
+                )"
+
+                [[ -n "$module_name" ]] &&
+                    all_cc+=("${module_name}${off}")
+
+                break
+            fi
+
+        done
+
+        #######################################################################
+        # USE variables
+        #######################################################################
+
+        for uvar in "${!USE_vars[@]}"
+        do
+
+            if [[ "$cmd" == "$uvar" ]]; then
+
+                USE_vars["$uvar"]="$uvar=1"
+                break
+
+            fi
+
+            if [[ "$cmd" == "$uvar$off" ]]; then
+
+                USE_vars_disable["$uvar"]="$uvar=1"
+                break
+
+            fi
+
+        done
+
+        #######################################################################
+        # Special flags
+        #######################################################################
+
+        case "$cmd" in
+
+            OPENBOX)
+                OPENBOX=1
+                ;;
+
+            UFS916003)
+                UFS916003=1
+                ;;
+
+            USE_VERBOSE)
+                s3cfg_vars[USE_VERBOSE]=1
+                ;;
+
+        esac
+
+    done
+
+    ###########################################################################
+    # Start build
+    ###########################################################################
+
+    if declare -F _pre_build >/dev/null 2>&1; then
+
+        _pre_build "$TOOLCHAIN"
+        exit $?
+
+    fi
+
+    printf 'ERROR: _pre_build() not available\n' >&2
+    exit 1
+
+done
+
+###############################################################################
+# Unknown command
+###############################################################################
+
+if declare -F _help >/dev/null 2>&1; then
+    _help
+    exit 1
+fi
+
+cat <<EOF
+
+Simplebuild3 ${SIMPLEVERSION}
+
+Unknown command: $command
+
+Try:
+
+    ./s3 help
+    ./s3 menu
+    ./s3 version
+    ./s3 sysinfo
+    ./s3 syscheck
+
+EOF
+
+exit 1
