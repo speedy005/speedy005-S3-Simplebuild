@@ -1,211 +1,233 @@
-
 update_me() {
-    clear    
-    s3logo
+clear
+s3logo
 
-    printf "  S3 GIT UPDATE – PROGRAMMDATEIEN AKTUALISIEREN\n"
-    printf "  --------------------------------------------\n"
+printf "  S3 GIT UPDATE – PROGRAMMDATEIEN AKTUALISIEREN\n"
+printf "  --------------------------------------------\n"
 
-    local remote candidate remote_url remote_ref
-    local logfile tmpdir tree manifest rel src dest
-    local backup_root copied updated unchanged protected failed
-    local result
+local remote candidate remote_url remote_ref
+local logfile tmpdir tree manifest rel src dest
+local backup_root copied updated unchanged protected failed
+local result staged tracked mode
 
-    check_url "$s3url" || return 1
+check_url "$s3url" || return 1
 
-    if [ ! -d "$workdir/.git" ]; then
-        echo "FEHLER: Kein Git-Repository im Arbeitsverzeichnis."
-        return 1
+if ! git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "FEHLER: Kein Git-Arbeitsverzeichnis."
+    return 1
+fi
+
+mkdir -p "$ldir" "$dldir" || return 1
+logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
+
+(
+    set -o pipefail
+    cd "$workdir" || exit 1
+
+    echo "S3 Speedy005 – Programmdateien aktualisieren"
+    echo "============================================"
+
+    remote=""
+    for candidate in speedy005 origin; do
+        remote_url=$(git remote get-url "$candidate" 2>/dev/null) || continue
+        if [[ "$remote_url" == *"speedy005-S3-Simplebuild"* ]]; then
+            remote="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$remote" ]; then
+        echo "FEHLER: Kein Speedy005-Remote gefunden."
+        git remote -v
+        exit 1
     fi
 
-    mkdir -p "$ldir" "$dldir" || return 1
-    logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
+    echo "Remote: $remote"
 
-    (
-        set -o pipefail
-        cd "$workdir" || exit 1
+    if ! git fetch "$remote" refs/heads/master; then
+        echo "FEHLER: Git-Download fehlgeschlagen."
+        exit 1
+    fi
 
-        echo "S3 Speedy005 – Programmdateien aktualisieren"
-        echo "============================================"
+    remote_ref="FETCH_HEAD"
+    echo "Lokaler Commit: $(git rev-parse --short HEAD)"
+    echo "Online-Commit:  $(git rev-parse --short "$remote_ref")"
+    echo
 
-        # Speedy005-Remote finden
-        remote=""
+    tmpdir=$(mktemp -d "$dldir/s3_update.XXXXXX") || exit 1
+    trap 'rm -rf -- "$tmpdir"' EXIT
 
-        for candidate in speedy005 origin; do
-            remote_url=$(git remote get-url "$candidate" 2>/dev/null) || continue
+    tree="$tmpdir/tree"
+    manifest="$tmpdir/manifest"
+    mkdir -p "$tree" || exit 1
 
-            if [[ "$remote_url" == *"speedy005-S3-Simplebuild"* ]]; then
-                remote="$candidate"
-                break
-            fi
-        done
+    if ! git archive "$remote_ref" | tar -xf - -C "$tree"; then
+        echo "FEHLER: Online-Dateien konnten nicht exportiert werden."
+        exit 1
+    fi
 
-        if [ -z "$remote" ]; then
-            echo "FEHLER: Kein Speedy005-Remote gefunden."
-            git remote -v
-            exit 1
-        fi
+    if ! (cd "$tree" && find . -mindepth 1 -print0) > "$manifest"; then
+        echo "FEHLER: Dateiliste konnte nicht erstellt werden."
+        exit 1
+    fi
 
-        echo "Remote: $remote"
+    backup_root="$ldir/update_backup_$(date +%F_%H%M%S)_$$"
+    copied=0
+    updated=0
+    unchanged=0
+    protected=0
+    failed=0
 
-        # Aktuellen Online-Stand abrufen
-        if ! git fetch "$remote" refs/heads/master; then
-            echo "FEHLER: Git-Download fehlgeschlagen."
-            exit 1
-        fi
+    while IFS= read -r -d '' rel; do
+        rel="${rel#./}"
 
-        remote_ref="FETCH_HEAD"
-
-        echo "Lokaler Commit: $(git rev-parse --short HEAD)"
-        echo "Online-Commit:  $(git rev-parse --short "$remote_ref")"
-        echo
-
-        # Online-Dateien in temporären Ordner exportieren
-        tmpdir=$(mktemp -d "$dldir/s3_update.XXXXXX") || exit 1
-        trap 'rm -rf -- "$tmpdir"' EXIT
-
-        tree="$tmpdir/tree"
-        manifest="$tmpdir/manifest"
-
-        mkdir -p "$tree" || exit 1
-
-        if ! git archive "$remote_ref" | tar -xf - -C "$tree"; then
-            echo "FEHLER: Online-Dateien konnten nicht exportiert werden."
-            exit 1
-        fi
-
-        # Dateiliste mit NUL-Trennung, damit Sonderzeichen funktionieren
-        if ! (
-            cd "$tree" && find . -mindepth 1 -print0
-        ) > "$manifest"; then
-            echo "FEHLER: Dateiliste konnte nicht erstellt werden."
-            exit 1
-        fi
-
-        # Sicherungen dauerhaft im Log-Verzeichnis ablegen
-        backup_root="$ldir/update_backup_$(date +%F_%H%M%S)_$$"
-
-        copied=0
-        updated=0
-        unchanged=0
-        protected=0
-        failed=0
-
-        while IFS= read -r -d '' rel; do
-            rel="${rel#./}"
-            src="$tree/$rel"
-            dest="$workdir/$rel"
-
-            # Nur reguläre Dateien und Symlinks aus dem Git-Export behandeln.
-            # Verzeichnisse entstehen bei Bedarf automatisch.
-            if [ -d "$src" ] && [ ! -L "$src" ]; then
+        # Pfade außerhalb des Projektverzeichnisses ablehnen.
+        case "$rel" in
+            ""|/*|..|../*|*/../*|*/..)
+                echo "FEHLER: Unsicherer Online-Pfad: $rel"
+                failed=$((failed + 1))
                 continue
-            fi
+                ;;
+        esac
 
-            if [ ! -f "$src" ] && [ ! -L "$src" ]; then
-                echo "ÜBERSPRUNGEN (kein regulärer Dateityp): $rel"
-                protected=$((protected + 1))
-                continue
-            fi
+        src="$tree/$rel"
+        dest="$workdir/$rel"
 
-            # Kritische lokale Konfigurationen und Patches schützen
-            case "$rel" in
-                support/configs|support/configs/*|\
-                support/patches|support/patches/*|\
-                oscamsource.url)
-                    if [ -e "$dest" ] || [ -L "$dest" ]; then
-                        echo "GESCHÜTZT: $rel"
-                        protected=$((protected + 1))
-                        continue
-                    fi
-                    ;;
-            esac
+        # Verzeichnisse nicht direkt als Dateien installieren.
+        if [ -d "$src" ] && [ ! -L "$src" ]; then
+            continue
+        fi
 
-            # Neue Datei kopieren, wenn sie lokal fehlt
-            if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-                if ! mkdir -p -- "$(dirname "$dest")"; then
-                    echo "FEHLER: Zielordner nicht erstellbar: $rel"
-                    failed=$((failed + 1))
+        if [ ! -f "$src" ] && [ ! -L "$src" ]; then
+            echo "ÜBERSPRUNGEN (Dateityp nicht unterstützt): $rel"
+            protected=$((protected + 1))
+            continue
+        fi
+
+        # Lokale Konfigurationen, Patches und Quell-URL schützen.
+        # Fehlt eine solche Datei lokal, darf sie neu angelegt werden.
+        case "$rel" in
+            support/configs|support/configs/*|\
+            support/patches|support/patches/*|\
+            oscamsource.url)
+                if [ -e "$dest" ] || [ -L "$dest" ]; then
+                    echo "GESCHÜTZT: $rel"
+                    protected=$((protected + 1))
                     continue
                 fi
+                ;;
+        esac
 
-                if cp -a -- "$src" "$dest"; then
-                    echo "NEU KOPIERT: $rel"
-                    copied=$((copied + 1))
-                else
-                    echo "FEHLER beim Kopieren: $rel"
-                    failed=$((failed + 1))
-                fi
-                continue
-            fi
+        # Vorhandene Symlinks und Verzeichnisse niemals ersetzen.
+        if [ -L "$dest" ]; then
+            echo "GESCHÜTZT (Symlink): $rel"
+            protected=$((protected + 1))
+            continue
+        fi
 
-            # Bereits vorhandene Verzeichnisse nicht durch Dateien ersetzen
-            if [ -d "$dest" ] && [ ! -L "$dest" ]; then
-                echo "GESCHÜTZT (Ziel ist Verzeichnis): $rel"
-                protected=$((protected + 1))
-                continue
-            fi
+        if [ -d "$dest" ]; then
+            echo "GESCHÜTZT (Ziel ist Verzeichnis): $rel"
+            protected=$((protected + 1))
+            continue
+        fi
 
-            # Identische Dateien nicht unnötig ersetzen
-            if [ -f "$src" ] && [ -f "$dest" ] &&
-               [ ! -L "$src" ] && [ ! -L "$dest" ] &&
-               cmp -s -- "$src" "$dest"; then
-                unchanged=$((unchanged + 1))
-                continue
-            fi
+        tracked=0
+        if git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+            tracked=1
+        fi
 
-            # Vorhandene Datei oder Symlink vor Änderung sichern
+        # Vorhandene lokale Dateien ohne Git-Eintrag nicht überschreiben.
+        if [ -e "$dest" ] && [ "$tracked" -eq 0 ]; then
+            echo "UNVERSIONIERT – GESCHÜTZT: $rel"
+            protected=$((protected + 1))
+            continue
+        fi
+
+        # Identische reguläre Dateien nicht unnötig ersetzen.
+        if [ -f "$src" ] && [ -f "$dest" ] &&
+           [ ! -L "$src" ] && cmp -s -- "$src" "$dest"; then
+            unchanged=$((unchanged + 1))
+            continue
+        fi
+
+        # Online-Datei in das Zielverzeichnis vorbereiten.
+        if ! mkdir -p -- "$(dirname "$dest")"; then
+            echo "FEHLER: Zielordner nicht erstellbar: $rel"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        staged="$(dirname "$dest")/.s3_update_stage_$$"
+        if [ -e "$staged" ] || [ -L "$staged" ]; then
+            echo "FEHLER: Temporäres Ziel existiert bereits: $staged"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        if ! cp -a -- "$src" "$staged"; then
+            echo "FEHLER: Online-Datei konnte nicht vorbereitet werden: $rel"
+            rm -f -- "$staged"
+            failed=$((failed + 1))
+            continue
+        fi
+
+        # Vorhandene versionierte Datei vor Austausch sichern.
+        if [ -e "$dest" ] || [ -L "$dest" ]; then
             if ! mkdir -p -- "$backup_root/$(dirname "$rel")"; then
                 echo "FEHLER: Sicherungsordner nicht erstellbar: $rel"
+                rm -f -- "$staged"
                 failed=$((failed + 1))
                 continue
             fi
 
             if ! cp -a -- "$dest" "$backup_root/$rel"; then
                 echo "FEHLER: Sicherung fehlgeschlagen: $rel"
+                rm -f -- "$staged"
                 failed=$((failed + 1))
                 continue
             fi
-
-            # Online-Version installieren
-            if cp -a --remove-destination -- "$src" "$dest"; then
-                echo "AKTUALISIERT: $rel"
-                updated=$((updated + 1))
-            else
-                echo "FEHLER beim Aktualisieren: $rel"
-                failed=$((failed + 1))
-            fi
-
-        done < "$manifest"
-
-        echo
-        echo "Update abgeschlossen."
-        echo "Neue Dateien:             $copied"
-        echo "Aktualisierte Dateien:    $updated"
-        echo "Unverändert:              $unchanged"
-        echo "Geschützte Dateien:       $protected"
-        echo "Fehler:                   $failed"
-
-        if [ "$updated" -gt 0 ]; then
-            echo "Sicherungen: $backup_root"
-        else
-            echo "Keine vorhandenen Dateien ersetzt."
         fi
 
-        echo
-        echo "Hinweis: Lokale Dateien außerhalb des Online-Git"
-        echo "wurden nicht gelöscht. Konfigurationen und Patches"
-        echo "wurden geschützt."
+        # Atomarer Austausch innerhalb desselben Dateisystems.
+        # cp -a übernimmt die Git-Modi, darunter das Ausführungsrecht.
+        if mv -fT -- "$staged" "$dest"; then
+            if [ "$tracked" -eq 0 ]; then
+                echo "NEU KOPIERT: $rel"
+                copied=$((copied + 1))
+            else
+                echo "AKTUALISIERT: $rel"
+                updated=$((updated + 1))
+            fi
+        else
+            echo "FEHLER beim Installieren: $rel"
+            rm -f -- "$staged"
+            failed=$((failed + 1))
+        fi
 
-        [ "$failed" -eq 0 ] || exit 1
+    done < "$manifest"
 
-    ) 2>&1 | _log "$logfile"
+    echo
+    echo "Update abgeschlossen."
+    echo "Neue Dateien:          $copied"
+    echo "Aktualisierte Dateien: $updated"
+    echo "Unverändert:           $unchanged"
+    echo "Geschützt:             $protected"
+    echo "Fehler:                $failed"
+    echo "Sicherungen:           $backup_root"
+    echo
+    echo "Lokale Dateien, die nicht im Online-Git stehen,"
+    echo "wurden nicht gelöscht."
 
-    result=${PIPESTATUS[0]}
-    sleep 2
-    return "$result"
+    [ "$failed" -eq 0 ] || exit 1
+
+) 2>&1 | _log "$logfile"
+
+result=${PIPESTATUS[0]}
+sleep 2
+return "$result"
+
 }
 
 fix_me() {
-    update_me
+update_me
 }
