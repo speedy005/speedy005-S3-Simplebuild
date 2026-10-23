@@ -12,7 +12,7 @@
 #   support/software/
 #
 
-SIMPLEVERSION="2026.03"
+SIMPLEVERSION="2026.10"
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     VERSIONCOUNTER="$(git rev-list --count HEAD 2>/dev/null || printf '%s_non-git' "$SIMPLEVERSION")"
