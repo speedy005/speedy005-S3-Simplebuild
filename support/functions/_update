@@ -23,48 +23,44 @@ update_me(){
 		else
 			printf "  is up to date\n   Online revision: $online_revision\n\n"
 		fi
-	else
-		logfile="$ldir/$(date +%F.%H%M%S)_update_me.log";
-		(
-		cd $workdir
-		GIT_OPT='-c color.ui=always --no-pager'
-		GIT_BRANCH="$(git branch --show-current)"
-		git fetch speedy005 master || return 1
-		ahead=$(git rev-list origin/$GIT_BRANCH..HEAD --count)
-		local_revision=$(git rev-list HEAD --count)
-		local_commit=$(git --no-pager log HEAD -n1 --oneline)
-		online_revision=$(git rev-list origin/$GIT_BRANCH --count)
-		online_commit=$(git --no-pager log origin/$GIT_BRANCH -n1 --oneline)
-		if [ $behind -eq 0 -a $ahead -eq 0 ]; then
-			printf "${p_l}STATUS: s3 is up to date${re_}\n Local = Online revision $local_revision: $local_commit\n\n"
-		else
-			git $GIT_OPT status
-			printf "\n${p_l}START: s3 updates pending${re_}\n  Local revision $local_revision: $local_commit\n Online revision $online_revision: $online_commit\n\n"
-			git $GIT_OPT log HEAD..origin/$GIT_BRANCH --oneline
-			sleep 1
+	
+    else
+        logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
 
-			if [ $ahead -gt 0 ]; then
-				printf "\n${p_l}STAGE 1: Try pull with reset (forced pushes on remote)...${re_}\n\n"
-				git reset origin/$GIT_BRANCH --hard
-			else
-				printf "\n${p_l}STAGE 1: Try simple pull (auto-merge)...${re_}\n\n"
-			fi
+        (
+            cd "$workdir" || exit 1
 
-			if ! git $GIT_OPT pull; then
-				printf "\n${p_l}STAGE 2: Reset conflicting tracked files/folders...${re_}\n\n"
-				if ! git $GIT_OPT pull |& grep '^[[:blank:]]' | xargs git checkout; then
-					printf "\n${p_l}STAGE 3: Stash conflicting tracked files/folders...${re_}\n\n"
-					git $GIT_OPT stash
-					printf "\n${p_l}STAGE 4: Remove conflicting untracked files/folders...${re_}\n\n"
-					git $GIT_OPT pull |& grep '^[[:blank:]]' | xargs rm -rf
-				fi
-				git $GIT_OPT pull
-				git $GIT_OPT stash clear
-			fi
-			printf "\n${p_l}UPDATE finished.${re_}\n\n"
-		fi
-		) |& _log "$logfile"
-	fi
+            echo "S3 Speedy005 Update-Check"
+            echo "========================"
+
+            git fetch speedy005 master || {
+                echo "FEHLER: Speedy005 konnte nicht abgerufen werden."
+                exit 1
+            }
+
+            local_commit=$(git rev-parse --short HEAD)
+            online_commit=$(git rev-parse --short speedy005/master)
+
+            echo "Lokaler Commit: $local_commit"
+            echo "Speedy005-Commit: $online_commit"
+            echo
+
+            if git diff --quiet HEAD speedy005/master; then
+                echo "Die versionierten Dateien stimmen mit Speedy005 überein."
+            else
+                echo "UPDATE VERFÜGBAR oder Dateien unterscheiden sich."
+                echo
+                echo "Änderungen zwischen lokalem Stand und Speedy005:"
+                git diff --stat HEAD speedy005/master
+                echo
+                echo "Lokale Änderungen im Arbeitsverzeichnis:"
+                git status --short
+                echo
+                echo "Es wurden keine Dateien überschrieben."
+            fi
+        ) 2>&1 | _log "$logfile"
+    fi
+
 	sleep 2
 }
 
