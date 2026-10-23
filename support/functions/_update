@@ -1,35 +1,32 @@
 
-#!/bin/bash
-
 update_me() {
     clear
     s3logo
 
-    printf "  s3_git UPDATE\n  -------------\n"
+    printf "  S3 GIT UPDATE – ALLE NEUEN DATEIEN\n"
+    printf "  ----------------------------------\n"
 
-    local logfile remote candidate remote_url remote_ref
-    local local_commit online_commit answer
+    local remote candidate remote_url remote_ref
+    local logfile tmpdir src rel dest
+    local copied skipped failed result
 
     check_url "$s3url" || return 1
 
     if [ ! -d "$workdir/.git" ]; then
-        echo
-        echo "Kein Git-Repository im Arbeitsverzeichnis gefunden."
-        echo "Es wird nichts automatisch überschrieben."
-        sleep 2
+        echo "FEHLER: Kein Git-Repository im Arbeitsverzeichnis."
         return 1
     fi
 
-    mkdir -p "$ldir" || return 1
+    mkdir -p "$ldir" "$dldir" || return 1
     logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
 
     (
         cd "$workdir" || exit 1
 
-        echo "S3 Speedy005 Update"
-        echo "==================="
+        echo "S3 Speedy005 – Neue Dateien kopieren"
+        echo "===================================="
 
-        # Remote anhand der Repository-URL finden
+        # Speedy005-Remote finden
         remote=""
 
         for candidate in speedy005 origin; do
@@ -42,93 +39,81 @@ update_me() {
         done
 
         if [ -z "$remote" ]; then
-            echo "FEHLER: Kein passender Speedy005-Remote gefunden."
+            echo "FEHLER: Kein Speedy005-Remote gefunden."
             git remote -v
             exit 1
         fi
 
         echo "Remote: $remote"
-        echo
 
-        # Aktualisiert FETCH_HEAD, nicht die Arbeitsdateien.
+        # Aktuellen Git-Stand laden
         if ! git fetch "$remote" refs/heads/master; then
-            echo "FEHLER: Update konnte nicht abgerufen werden."
+            echo "FEHLER: Git-Download fehlgeschlagen."
             exit 1
         fi
 
         remote_ref="FETCH_HEAD"
+        echo "Online-Commit: $(git rev-parse --short "$remote_ref")"
 
-        local_commit=$(git rev-parse --short HEAD) || exit 1
-        online_commit=$(git rev-parse --short "$remote_ref") || exit 1
+        # Git-Dateien temporär exportieren
+        tmpdir=$(mktemp -d "$dldir/s3_update.XXXXXX") || exit 1
+        trap 'rm -rf -- "$tmpdir"' EXIT
 
-        echo "Lokaler Commit:  $local_commit"
-        echo "Online-Commit:   $online_commit"
-        echo
-
-        if git diff --quiet HEAD "$remote_ref" &&
-           [ "$(git rev-parse HEAD)" = "$(git rev-parse "$remote_ref")" ]; then
-            echo "S3 ist bereits auf dem aktuellen Commit."
-            exit 0
+        if ! git archive "$remote_ref" | tar -xf - -C "$tmpdir"; then
+            echo "FEHLER: Git-Dateien konnten nicht entpackt werden."
+            exit 1
         fi
 
-        echo "Änderungen zwischen lokalem Stand und Online-Version:"
-        git diff --stat HEAD "$remote_ref"
-        echo
+        copied=0
+        skipped=0
+        failed=0
 
-        # Vor einer Installation müssen Index, Arbeitsdateien und
-        # unversionierte Dateien sauber sein.
-        if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            echo "UPDATE NICHT INSTALLIERT:"
-            echo "Das Arbeitsverzeichnis enthält lokale Änderungen"
-            echo "oder zusätzliche Dateien."
-            echo
-            echo "Diese zuerst sichern bzw. separat prüfen."
-            echo "Es wurden keine Projektdateien überschrieben."
-            git status --short
-            exit 2
-        fi
+        # Alle Dateien rekursiv prüfen, auch versteckte Dateien
+        while IFS= read -r -d '' src; do
+            rel="${src#"$tmpdir"/}"
+            dest="$workdir/$rel"
 
-        # Nur installieren, wenn der lokale Commit Vorfahr des
-        # Online-Commits ist. Keine History überschreiben.
-        if ! git merge-base --is-ancestor HEAD "$remote_ref"; then
-            echo "UPDATE NICHT INSTALLIERT:"
-            echo "Kein sicherer Fast-Forward möglich."
-            echo "Lokaler und Online-Verlauf müssen separat geprüft werden."
-            exit 3
-        fi
-
-        echo
-        read -r -p "Update auf $online_commit installieren? [j/N] " answer
-
-        case "$answer" in
-            j|J|ja|JA|Ja)
-                if git merge --ff-only "$remote_ref"; then
-                    echo
-                    echo "Update erfolgreich installiert."
-                    echo "Neuer Commit: $(git rev-parse --short HEAD)"
-                else
-                    echo "FEHLER: Installation fehlgeschlagen."
-                    exit 1
+            # Vorhandene Dateien, Symlinks und Ordner nicht ersetzen
+            if [ -e "$dest" ] || [ -L "$dest" ]; then
+                if [ -d "$src" ] && [ ! -L "$src" ] &&
+                   [ -d "$dest" ] && [ ! -L "$dest" ]; then
+                    continue
                 fi
-                ;;
-            *)
-                echo "Update nicht installiert."
-                ;;
-        esac
+
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            if ! mkdir -p -- "$(dirname "$dest")"; then
+                echo "FEHLER: Ordner nicht erstellbar: $rel"
+                failed=$((failed + 1))
+                continue
+            fi
+
+            if cp -a -- "$src" "$dest"; then
+                echo "KOPIERT: $rel"
+                copied=$((copied + 1))
+            else
+                echo "FEHLER: $rel"
+                failed=$((failed + 1))
+            fi
+        done < <(find "$tmpdir" -mindepth 1 -print0)
+
+        echo
+        echo "Update abgeschlossen."
+        echo "Neu kopiert:                 $copied"
+        echo "Bereits vorhanden:           $skipped"
+        echo "Fehler:                      $failed"
+        echo "Bestehende Dateien wurden nicht überschrieben."
+
+        [ "$failed" -eq 0 ] || exit 1
     ) 2>&1 | _log "$logfile"
 
-    local result=${PIPESTATUS[0]}
+    result=${PIPESTATUS[0]}
     sleep 2
     return "$result"
 }
 
 fix_me() {
-    clear
-    s3logo
-
-    echo "Die Update-Prüfung löscht keine Verzeichnisse."
-    echo "Starte die sichere Update-Prüfung ..."
-    echo
-
     update_me
 }
