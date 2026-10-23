@@ -3,12 +3,13 @@ update_me() {
     clear
     s3logo
 
-    printf "  S3 GIT UPDATE – NEUE GIT-DATEIEN\n"
-    printf "  --------------------------------\n"
+    printf "  S3 GIT UPDATE – NEUE UND GEÄNDERTE DATEIEN\n"
+    printf "  -----------------------------------------\n"
 
     local remote candidate remote_url remote_ref
-    local logfile tmpdir tree added_file src rel dest
-    local copied skipped failed result
+    local logfile tmpdir tree changed_file rel src dest
+    local backup_root backup copied updated skipped failed
+    local result tracked protected
 
     check_url "$s3url" || return 1
 
@@ -23,10 +24,10 @@ update_me() {
     (
         cd "$workdir" || exit 1
 
-        echo "S3 Speedy005 – Neue Git-Dateien kopieren"
-        echo "========================================"
+        echo "S3 Speedy005 – Update"
+        echo "====================="
 
-        # Speedy005-Remote finden
+        # Speedy005-Remote ermitteln
         remote=""
 
         for candidate in speedy005 origin; do
@@ -46,40 +47,46 @@ update_me() {
 
         echo "Remote: $remote"
 
-        # Aktuellen Online-Stand laden
+        # Aktuellen Online-Stand abrufen
         if ! git fetch "$remote" refs/heads/master; then
             echo "FEHLER: Git-Download fehlgeschlagen."
             exit 1
         fi
 
         remote_ref="FETCH_HEAD"
+
         echo "Lokaler Commit: $(git rev-parse --short HEAD)"
         echo "Online-Commit:  $(git rev-parse --short "$remote_ref")"
         echo
 
-        # Temporären Arbeitsbereich erstellen
+        # Temporären Downloadbereich erstellen
         tmpdir=$(mktemp -d "$dldir/s3_update.XXXXXX") || exit 1
         trap 'rm -rf -- "$tmpdir"' EXIT
 
         tree="$tmpdir/tree"
-        added_file="$tmpdir/added-files"
+        changed_file="$tmpdir/changed-files"
 
         mkdir -p "$tree" || exit 1
 
-        # Nur Pfade ermitteln, die im Online-Git neu hinzugekommen sind
-        if ! git diff --diff-filter=A --name-only -z \
-            HEAD "$remote_ref" > "$added_file"; then
+        # Online-Dateien in einen temporären Ordner exportieren
+        if ! git archive "$remote_ref" | tar -xf - -C "$tree"; then
+            echo "FEHLER: Online-Dateien konnten nicht entpackt werden."
+            exit 1
+        fi
+
+        # Geänderte und neu hinzugefügte Pfade seit lokalem HEAD
+        if ! git diff --name-only --no-renames -z \
+            HEAD "$remote_ref" > "$changed_file"; then
             echo "FEHLER: Git-Dateiliste konnte nicht ermittelt werden."
             exit 1
         fi
 
-        # Online-Version temporär exportieren
-        if ! git archive "$remote_ref" | tar -xf - -C "$tree"; then
-            echo "FEHLER: Git-Dateien konnten nicht entpackt werden."
-            exit 1
-        fi
+        # Dauerhafte Sicherung außerhalb des temporären Ordners
+        backup_root="$ldir/update_backup_$(date +%F_%H%M%S)"
+        mkdir -p "$backup_root" || exit 1
 
         copied=0
+        updated=0
         skipped=0
         failed=0
 
@@ -87,43 +94,101 @@ update_me() {
             src="$tree/$rel"
             dest="$workdir/$rel"
 
-            # Unerwartete bzw. nicht vorhandene Quellen überspringen
+            # Online gelöschte Dateien lokal nicht löschen
             if [ ! -e "$src" ] && [ ! -L "$src" ]; then
-                echo "FEHLER: Quelle fehlt: $rel"
-                failed=$((failed + 1))
-                continue
-            fi
-
-            # Bestehende Dateien niemals überschreiben
-            if [ -e "$dest" ] || [ -L "$dest" ]; then
-                echo "ÜBERSPRUNGEN (existiert): $rel"
+                echo "ÜBERSPRUNGEN (online gelöscht): $rel"
                 skipped=$((skipped + 1))
                 continue
             fi
 
-            if ! mkdir -p -- "$(dirname "$dest")"; then
-                echo "FEHLER: Zielordner nicht erstellbar: $rel"
+            # Zielordner anlegen, falls die Datei neu ist
+            if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+                if ! mkdir -p -- "$(dirname "$dest")"; then
+                    echo "FEHLER: Zielordner nicht erstellbar: $rel"
+                    failed=$((failed + 1))
+                    continue
+                fi
+
+                if cp -a -- "$src" "$dest"; then
+                    echo "NEU KOPIERT: $rel"
+                    copied=$((copied + 1))
+                else
+                    echo "FEHLER beim Kopieren: $rel"
+                    failed=$((failed + 1))
+                fi
+                continue
+            fi
+
+            # Nur vorhandene, von Git verwaltete Dateien aktualisieren
+            if ! git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+                echo "ÜBERSPRUNGEN (lokale Datei): $rel"
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            # Lokale Änderungen niemals automatisch überschreiben
+            if ! git diff --quiet HEAD -- "$rel"; then
+                echo "ÜBERSPRUNGEN (lokal geändert): $rel"
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            # Konfigurationen und Patches nicht automatisch ersetzen
+            protected=0
+            case "$rel" in
+                support/configs/*|support/patches/*)
+                    protected=1
+                    ;;
+            esac
+
+            if [ "$protected" -eq 1 ]; then
+                echo "ÜBERSPRUNGEN (Konfiguration/Patch): $rel"
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            # Unveränderte Dateien nicht unnötig ersetzen
+            if cmp -s -- "$src" "$dest"; then
+                continue
+            fi
+
+            # Datei vor dem Ersetzen sichern
+            if ! mkdir -p -- "$backup_root/$(dirname "$rel")"; then
+                echo "FEHLER: Sicherungsordner nicht erstellbar: $rel"
                 failed=$((failed + 1))
                 continue
             fi
 
+            if ! cp -a -- "$dest" "$backup_root/$rel"; then
+                echo "FEHLER: Sicherung fehlgeschlagen: $rel"
+                failed=$((failed + 1))
+                continue
+            fi
+
+            # Online-Version installieren
             if cp -a -- "$src" "$dest"; then
-                echo "NEU KOPIERT: $rel"
-                copied=$((copied + 1))
+                echo "AKTUALISIERT: $rel"
+                updated=$((updated + 1))
             else
-                echo "FEHLER beim Kopieren: $rel"
+                echo "FEHLER beim Aktualisieren: $rel"
                 failed=$((failed + 1))
             fi
-        done < "$added_file"
+
+        done < "$changed_file"
 
         echo
         echo "Update abgeschlossen."
-        echo "Neue Git-Dateien kopiert: $copied"
-        echo "Bereits vorhanden:        $skipped"
+        echo "Neue Dateien:             $copied"
+        echo "Aktualisierte Dateien:    $updated"
+        echo "Übersprungene Dateien:    $skipped"
         echo "Fehler:                   $failed"
-        echo "Bestehende Dateien wurden nicht überschrieben."
+        echo "Sicherungen:              $backup_root"
+        echo
+        echo "Hinweis: Lokale Änderungen, Konfigurationen und Patches"
+        echo "wurden vor automatischem Überschreiben geschützt."
 
         [ "$failed" -eq 0 ] || exit 1
+
     ) 2>&1 | _log "$logfile"
 
     result=${PIPESTATUS[0]}
