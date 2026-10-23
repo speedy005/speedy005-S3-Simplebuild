@@ -1,0 +1,118 @@
+#!/bin/bash
+
+svncheckout(){
+	echo -en "$c_l"
+	fc1="$(mktemp)"
+	clear
+	ologo
+	i=0
+	COUNT=0
+
+	check_url "$trunkurl" || return
+
+	if [ -d "${repodir}" ]
+	then
+		rm -rf "${repodir}"
+		printf "$p_l\n  $txt_delete oscam-${REPO} $re_\n"
+	else
+		printf "$p_l\n  $txt_no oscam-${REPO} $txt_found\n$re_"
+	fi
+
+	printf "$w_l  ${REPO^^} Repository: $g_l$trunkurl$re_"
+	[ ! -z "$1" ] && [ $(($1)) -gt 6999 ] && opt_="-r$1" && mac_="($txt_selected)" || opt_=''
+
+	printf "\n$w_l  ${REPO^^} FileCount : "
+	svn info -R "$trunkurl" |grep '^URL' |uniq |wc -l >"$fc1"
+	n=$(cat "$fc1")
+	printf "$g_l""$txt_found $n"
+	printf "\n$w_l  ${REPO^^} checkout  : "
+
+	while read line filename
+	do
+		counter=$(( 100*(++i)/n))
+		tput cup 10 18
+		[ "$counter" -lt "100" ] && echo -en "$g_l""$counter%$re_" || echo -e "$g_l""100%$re_"
+	done < <( svn co "$trunkurl" $opt_ "${repodir}" |sed "s|${repodir}/||g")
+
+	tput cup 10 18;
+	echo -e "$g_l""100%$re_"
+
+	if [ -f "${repodir}/config.sh" ]
+	then
+		tput cup 11 0;
+		printf "$w_l  ${REPO^^} Revision  :$y_l $(REVISION) @ $(BRANCH) $b_l$mac_$re_\n$w_l  ${REPO^^} UserPath  :$y_l ${repodir}"
+	fi
+
+	[ -f "${repodir}/config.h" ]&& reset_="$("${repodir}/config.sh" -R)"
+	rm -rf "$fc1"
+	_nl
+	[ -f "$ispatched" ] && rm -f "$ispatched"
+	tar_repo
+}
+
+svnup(){
+	printf "$c_l"
+	clear
+	ologo
+	i=1
+
+	check_url "$trunkurl" || return
+
+	if [ -d "${repodir}" ]
+	then
+		printf "$p_l\n  $txt_update oscam-${REPO} $re_\n"
+	else
+		checkout
+		return
+	fi
+
+	printf "\n$w_l  ${REPO^^} TrunkURL  : $g_l""$trunkurl""$re_"
+	svn co "$trunkurl" "${repodir}" -q
+
+	if [ -f "${repodir}/config.sh" ]
+	then
+		tput cup 10 2
+		printf "\n$w_l  ${REPO^^} Revision  : ""$y_l$(REVISION) @ $(BRANCH) $b_l$mac_$re_\n$w_l  ${REPO^^} UserPath  : $y_l""${repodir}\n$re_"
+	fi
+
+	if [ -f "${repodir}/config.h" ]
+	then
+		reset_="$("${repodir}/config.sh" -R)"
+	fi
+}
+
+_dialog_checkout1_svn(){
+	rm -rf "${repodir}" 2>/dev/null
+	COUNT=0
+	[ -z "$1" ] && rn=0 || rn="$1"
+	if [ "$rn" -ge "7000" ]
+	then
+		_rev="-r $rn"
+		sc_text="Revision: $rn"
+	else
+		_rev=''
+		sc_text="$txt_latest"
+	fi
+	(printf "$txt_prepare_svn $txt_wait";)| "$gui" "$st_" "$bt_" "$title_" "$pb_" 3 55
+	nnn="$(svn info $_rev -R "$trunkurl" |grep "^URL: " |uniq |wc -l)"
+	"$gui" "$st_" "$bt_" "$title_" --title " -[ ${REPO^^} Checkout $sc_text ]- " --gauge "  $txt_wait" 6 75 < <(while read line filename;do ((++i));PCT=$(( 100*i/(nnn+1) ))
+cat <<EOF
+XXX
+$PCT
+  $line
+XXX
+EOF
+done < <(svn co "$trunkurl" "${repodir}" $_rev| sed "s@${repodir}@@g"| awk '{print $2}'
+	cd "${repodir}"
+	if [ -f "${repodir}/config.sh" ]
+	then
+		reset_="$("${repodir}/config.sh" -R)"
+		printf "Revision: $(REVISION) done..."
+		[ -f "$ispatched" ] && rm -f "$ispatched"
+		_get_config_menu
+	fi;))
+}
+
+svnurl(){
+	svn info | sed -ne 's/^URL: //p'
+}
