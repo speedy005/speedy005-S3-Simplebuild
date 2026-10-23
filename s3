@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # Simplebuild3 - main launcher
-# Version: 2026.03
+# Version: 2026.10
 #
 # Developer:
-#   Gorgone, WXbet
+#   Gorgone, speedy005
 #
 # This file is the main dispatcher.
 # The actual build functions are loaded from:
@@ -20,7 +20,7 @@ else
     VERSIONCOUNTER="$(printf '%s' "$SIMPLEVERSION" | sed 's/\(.\)/\1+0/g' | bc 2>/dev/null || printf '%s_non-git' "$SIMPLEVERSION")"
 fi
 
-DEVELOPER="Gorgone, WXbet"
+DEVELOPER="Gorgone, speedy005"
 
 OIFS="$IFS"
 
