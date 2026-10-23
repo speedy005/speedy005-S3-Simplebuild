@@ -1,15 +1,15 @@
 
 update_me() {
-    clear
+    clear    
     s3logo
 
-    printf "  S3 GIT UPDATE – NEUE UND GEÄNDERTE DATEIEN\n"
-    printf "  -----------------------------------------\n"
+    printf "  S3 GIT UPDATE – PROGRAMMDATEIEN AKTUALISIEREN\n"
+    printf "  --------------------------------------------\n"
 
     local remote candidate remote_url remote_ref
-    local logfile tmpdir tree changed_file rel src dest
-    local backup_root backup copied updated skipped failed
-    local result tracked protected
+    local logfile tmpdir tree manifest rel src dest
+    local backup_root copied updated unchanged protected failed
+    local result
 
     check_url "$s3url" || return 1
 
@@ -22,12 +22,13 @@ update_me() {
     logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
 
     (
+        set -o pipefail
         cd "$workdir" || exit 1
 
-        echo "S3 Speedy005 – Update"
-        echo "====================="
+        echo "S3 Speedy005 – Programmdateien aktualisieren"
+        echo "============================================"
 
-        # Speedy005-Remote ermitteln
+        # Speedy005-Remote finden
         remote=""
 
         for candidate in speedy005 origin; do
@@ -59,49 +60,68 @@ update_me() {
         echo "Online-Commit:  $(git rev-parse --short "$remote_ref")"
         echo
 
-        # Temporären Downloadbereich erstellen
+        # Online-Dateien in temporären Ordner exportieren
         tmpdir=$(mktemp -d "$dldir/s3_update.XXXXXX") || exit 1
         trap 'rm -rf -- "$tmpdir"' EXIT
 
         tree="$tmpdir/tree"
-        changed_file="$tmpdir/changed-files"
+        manifest="$tmpdir/manifest"
 
         mkdir -p "$tree" || exit 1
 
-        # Online-Dateien in einen temporären Ordner exportieren
         if ! git archive "$remote_ref" | tar -xf - -C "$tree"; then
-            echo "FEHLER: Online-Dateien konnten nicht entpackt werden."
+            echo "FEHLER: Online-Dateien konnten nicht exportiert werden."
             exit 1
         fi
 
-        # Geänderte und neu hinzugefügte Pfade seit lokalem HEAD
-        if ! git diff --name-only --no-renames -z \
-            HEAD "$remote_ref" > "$changed_file"; then
-            echo "FEHLER: Git-Dateiliste konnte nicht ermittelt werden."
+        # Dateiliste mit NUL-Trennung, damit Sonderzeichen funktionieren
+        if ! (
+            cd "$tree" && find . -mindepth 1 -print0
+        ) > "$manifest"; then
+            echo "FEHLER: Dateiliste konnte nicht erstellt werden."
             exit 1
         fi
 
-        # Dauerhafte Sicherung außerhalb des temporären Ordners
-        backup_root="$ldir/update_backup_$(date +%F_%H%M%S)"
-        mkdir -p "$backup_root" || exit 1
+        # Sicherungen dauerhaft im Log-Verzeichnis ablegen
+        backup_root="$ldir/update_backup_$(date +%F_%H%M%S)_$$"
 
         copied=0
         updated=0
-        skipped=0
+        unchanged=0
+        protected=0
         failed=0
 
         while IFS= read -r -d '' rel; do
+            rel="${rel#./}"
             src="$tree/$rel"
             dest="$workdir/$rel"
 
-            # Online gelöschte Dateien lokal nicht löschen
-            if [ ! -e "$src" ] && [ ! -L "$src" ]; then
-                echo "ÜBERSPRUNGEN (online gelöscht): $rel"
-                skipped=$((skipped + 1))
+            # Nur reguläre Dateien und Symlinks aus dem Git-Export behandeln.
+            # Verzeichnisse entstehen bei Bedarf automatisch.
+            if [ -d "$src" ] && [ ! -L "$src" ]; then
                 continue
             fi
 
-            # Zielordner anlegen, falls die Datei neu ist
+            if [ ! -f "$src" ] && [ ! -L "$src" ]; then
+                echo "ÜBERSPRUNGEN (kein regulärer Dateityp): $rel"
+                protected=$((protected + 1))
+                continue
+            fi
+
+            # Kritische lokale Konfigurationen und Patches schützen
+            case "$rel" in
+                support/configs|support/configs/*|\
+                support/patches|support/patches/*|\
+                oscamsource.url)
+                    if [ -e "$dest" ] || [ -L "$dest" ]; then
+                        echo "GESCHÜTZT: $rel"
+                        protected=$((protected + 1))
+                        continue
+                    fi
+                    ;;
+            esac
+
+            # Neue Datei kopieren, wenn sie lokal fehlt
             if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
                 if ! mkdir -p -- "$(dirname "$dest")"; then
                     echo "FEHLER: Zielordner nicht erstellbar: $rel"
@@ -119,40 +139,22 @@ update_me() {
                 continue
             fi
 
-            # Nur vorhandene, von Git verwaltete Dateien aktualisieren
-            if ! git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
-                echo "ÜBERSPRUNGEN (lokale Datei): $rel"
-                skipped=$((skipped + 1))
+            # Bereits vorhandene Verzeichnisse nicht durch Dateien ersetzen
+            if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+                echo "GESCHÜTZT (Ziel ist Verzeichnis): $rel"
+                protected=$((protected + 1))
                 continue
             fi
 
-            # Lokale Änderungen niemals automatisch überschreiben
-            if ! git diff --quiet HEAD -- "$rel"; then
-                echo "ÜBERSPRUNGEN (lokal geändert): $rel"
-                skipped=$((skipped + 1))
+            # Identische Dateien nicht unnötig ersetzen
+            if [ -f "$src" ] && [ -f "$dest" ] &&
+               [ ! -L "$src" ] && [ ! -L "$dest" ] &&
+               cmp -s -- "$src" "$dest"; then
+                unchanged=$((unchanged + 1))
                 continue
             fi
 
-            # Konfigurationen und Patches nicht automatisch ersetzen
-            protected=0
-            case "$rel" in
-                support/configs/*|support/patches/*)
-                    protected=1
-                    ;;
-            esac
-
-            if [ "$protected" -eq 1 ]; then
-                echo "ÜBERSPRUNGEN (Konfiguration/Patch): $rel"
-                skipped=$((skipped + 1))
-                continue
-            fi
-
-            # Unveränderte Dateien nicht unnötig ersetzen
-            if cmp -s -- "$src" "$dest"; then
-                continue
-            fi
-
-            # Datei vor dem Ersetzen sichern
+            # Vorhandene Datei oder Symlink vor Änderung sichern
             if ! mkdir -p -- "$backup_root/$(dirname "$rel")"; then
                 echo "FEHLER: Sicherungsordner nicht erstellbar: $rel"
                 failed=$((failed + 1))
@@ -166,7 +168,7 @@ update_me() {
             fi
 
             # Online-Version installieren
-            if cp -a -- "$src" "$dest"; then
+            if cp -a --remove-destination -- "$src" "$dest"; then
                 echo "AKTUALISIERT: $rel"
                 updated=$((updated + 1))
             else
@@ -174,18 +176,26 @@ update_me() {
                 failed=$((failed + 1))
             fi
 
-        done < "$changed_file"
+        done < "$manifest"
 
         echo
         echo "Update abgeschlossen."
         echo "Neue Dateien:             $copied"
         echo "Aktualisierte Dateien:    $updated"
-        echo "Übersprungene Dateien:    $skipped"
+        echo "Unverändert:              $unchanged"
+        echo "Geschützte Dateien:       $protected"
         echo "Fehler:                   $failed"
-        echo "Sicherungen:              $backup_root"
+
+        if [ "$updated" -gt 0 ]; then
+            echo "Sicherungen: $backup_root"
+        else
+            echo "Keine vorhandenen Dateien ersetzt."
+        fi
+
         echo
-        echo "Hinweis: Lokale Änderungen, Konfigurationen und Patches"
-        echo "wurden vor automatischem Überschreiben geschützt."
+        echo "Hinweis: Lokale Dateien außerhalb des Online-Git"
+        echo "wurden nicht gelöscht. Konfigurationen und Patches"
+        echo "wurden geschützt."
 
         [ "$failed" -eq 0 ] || exit 1
 
