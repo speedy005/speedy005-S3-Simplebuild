@@ -63,12 +63,12 @@ update_me(){
 			echo
 
 			# Remote-Stand abrufen, ohne Arbeitsdateien zu überschreiben
-			if ! git fetch "$remote" master; then
+			if ! git fetch "$remote" "master:refs/remotes/$remote/master"; then
 				echo "FEHLER: Speedy005 konnte nicht abgerufen werden."
 				exit 1
 			fi
 
-			remote_ref="$remote/master"
+			remote_ref="refs/remotes/$remote/master"
 
 			local_commit=$(git rev-parse --short HEAD) || exit 1
 			online_commit=$(git rev-parse --short "$remote_ref") || exit 1
