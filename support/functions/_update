@@ -136,11 +136,85 @@ logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
             tracked=1
         fi
 
-        # Lokal geänderte versionierte Dateien ebenfalls schützen.
+        # Lokal geänderte versionierte Dateien dreifach zusammenführen:
+        # lokale Datei + Basis-Commit + Online-Datei.
         if [ "$tracked" -eq 1 ] && { ! git diff --quiet HEAD -- "$rel" || ! git diff --cached --quiet -- "$rel"; }; then
-            echo "LOKAL GEÄNDERT – GESCHÜTZT: $rel"
-            protected=$((protected + 1))
-            continue
+            if [ ! -f "$dest" ] || [ -L "$dest" ]; then
+                echo "LOKAL GELÖSCHT ODER SONDERDATEI – GESCHÜTZT: $rel"
+                protected=$((protected + 1))
+                continue
+            fi
+
+            basefile="$tmpdir/merge_base"
+            merged="$tmpdir/merge_result"
+
+            if ! git show "HEAD:$rel" > "$basefile"; then
+                echo "BASIS FEHLT – GESCHÜTZT: $rel"
+                protected=$((protected + 1))
+                continue
+            fi
+
+            # Wenn online keine Änderung gegenüber der Basis vorliegt,
+            # bleibt die lokale Version unangetastet.
+            if cmp -s -- "$basefile" "$src"; then
+                echo "NUR LOKAL GEÄNDERT – BEIBEHALTEN: $rel"
+                protected=$((protected + 1))
+                continue
+            fi
+
+            if git merge-file -p "$dest" "$basefile" "$src" > "$merged"; then
+                if ! mkdir -p -- "$backup_root/$(dirname "$rel")"; then
+                    echo "FEHLER: Sicherungsordner nicht erstellbar: $rel"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if ! cp -a -- "$dest" "$backup_root/$rel"; then
+                    echo "FEHLER: Sicherung fehlgeschlagen: $rel"
+                    failed=$((failed + 1))
+                    continue
+                fi
+
+                staged="$(dirname "$dest")/.s3_update_stage_$$"
+                if [ -e "$staged" ] || [ -L "$staged" ]; then
+                    echo "FEHLER: Temporäres Ziel existiert bereits: $staged"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if ! cp -- "$merged" "$staged" || ! chmod --reference="$dest" "$staged"; then
+                    rm -f -- "$staged"
+                    echo "FEHLER: Zusammenführung konnte nicht vorbereitet werden: $rel"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if mv -fT -- "$staged" "$dest"; then
+                    echo "ZUSAMMENGEFÜHRT: $rel"
+                    updated=$((updated + 1))
+                else
+                    rm -f -- "$staged"
+                    echo "FEHLER: Zusammenführung konnte nicht installiert werden: $rel"
+                    failed=$((failed + 1))
+                fi
+                continue
+            else
+                merge_status=$?
+                if [ "$merge_status" -eq 1 ]; then
+                    conflict_root="$ldir/update_conflicts_$(date +%F_%H%M%S)_$$"
+                    conflict_file="$conflict_root/$rel.merge"
+                    if mkdir -p -- "$(dirname "$conflict_file")" &&
+                       cp -- "$merged" "$conflict_file"; then
+                        echo "MERGE-KONFLIKT – LOKALE DATEI BEHALTEN: $rel"
+                        echo "Zusammenführungsvorschlag: $conflict_file"
+                    else
+                        echo "MERGE-KONFLIKT; Vorschlag konnte nicht gespeichert werden: $rel"
+                        failed=$((failed + 1))
+                    fi
+                    protected=$((protected + 1))
+                    continue
+                fi
+                echo "FEHLER bei Zusammenführung: $rel"
+                failed=$((failed + 1))
+                continue
+            fi
         fi
 
         # Vorhandene lokale Dateien ohne Git-Eintrag nicht überschreiben.
