@@ -136,6 +136,13 @@ logfile="$ldir/$(date +%F.%H%M%S)_update_me.log"
             tracked=1
         fi
 
+        # Lokal geänderte versionierte Dateien ebenfalls schützen.
+        if [ "$tracked" -eq 1 ] && { ! git diff --quiet HEAD -- "$rel" || ! git diff --cached --quiet -- "$rel"; }; then
+            echo "LOKAL GEÄNDERT – GESCHÜTZT: $rel"
+            protected=$((protected + 1))
+            continue
+        fi
+
         # Vorhandene lokale Dateien ohne Git-Eintrag nicht überschreiben.
         if [ -e "$dest" ] && [ "$tracked" -eq 0 ]; then
             echo "UNVERSIONIERT – GESCHÜTZT: $rel"
