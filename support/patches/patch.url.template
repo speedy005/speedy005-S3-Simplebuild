@@ -1,9 +1,9 @@
-PATCHURL="https://raw.githubusercontent.com/gorgone/s3_releases/master/support/patches/no.patch"
+PATCHURL="https://raw.githubusercontent.com/speedy005/speedy005-S3-Simplebuild/tree/master/support/patches/patches/no.patch"
 PATCHNAME="no.patch"
 #PATCHCOUNT=3
-#PATCHURL1="https://raw.githubusercontent.com/gorgone/s3_releases/master/support/patches/no.patch"
+#PATCHURL1="https://raw.githubusercontent.com/speedy005/speedy005-S3-Simplebuild/tree/master/support/patches/patches/no.patch"
 #PATCHNAME1="no1.patch"
-#PATCHURL2="https://raw.githubusercontent.com/gorgone/s3_releases/master/support/patches/no.patch"
+#PATCHURL2="https://raw.githubusercontent.com/speedy005/speedy005-S3-Simplebuild/tree/master/support/patches/patches/no.patch"
 #PATCHNAME2="no2.patch"
-#PATCHURL3="https://raw.githubusercontent.com/gorgone/s3_releases/master/support/patches/no.patch"
+#PATCHURL3="https://raw.githubusercontent.com/speedy005/speedy005-S3-Simplebuild/tree/master/support/patches/patches/no.patch"
 #PATCHNAME3="no3.patch"
