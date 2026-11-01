@@ -266,8 +266,12 @@ _init_menu(){
 _select_menu(){
 	revision_="$($(USEGIT) && printf "$(COMMIT)" || printf "r$(REVISION)")"
 	_menutext="Simplebuild3 $(version | head -n1 | awk '{print $1}')\n $(REVISION)$($(USEGIT) && printf " @ $(COMMIT) @ $(BRANCH)" || printf " on $(BRANCH)")"
+	menu_options=( "Continue" "$txt_firstmenu_continue $revision_" "CHANGE" "$txt_firstmenu_chose" "CEDIT" "$txt_firstmenu_cedit" "TCUPDATE" "$txt_firstmenu_tcupdate" "LANG" "$txt_firstmenu_lang" "EXIT" "$txt_firstmenu_exit" )
+	if declare -F _speedy005_is_repo >/dev/null 2>&1 && _speedy005_is_repo; then
+		menu_options+=( "SPATCH" "Speedy005 Metadaten-Patch" )
+	fi
 	smenu=$(
-	"$gui" "$st_" "$bt_" "$title_" "$nc_" --title "-[ $txt_start_menu$(REPOIDENT) ]-" --menu "\n $_menutext" 15 55 7 "Continue" "$txt_firstmenu_continue $revision_" "CHANGE" "$txt_firstmenu_chose" "CEDIT" "$txt_firstmenu_cedit" "TCUPDATE" "$txt_firstmenu_tcupdate" "LANG" "$txt_firstmenu_lang" "EXIT" "$txt_firstmenu_exit")
+	"$gui" "$st_" "$bt_" "$title_" "$nc_" --title "-[ $txt_start_menu$(REPOIDENT) ]-" --menu "\n $_menutext" 15 55 8 "${menu_options[@]}")
 	[ $? = 255 ] && _select_menu
 
 	case $smenu in
@@ -290,6 +294,21 @@ _select_menu(){
 					fi
 					[ ! -z "$_rev" ] && check_url "$trunkurl" && _dialog_checkout1 "$_rev"
 					_select_menu;;
+		SPATCH)
+				current_mode="$(_speedy005_patch_mode)"
+				if [ "$current_mode" = "after_repo_patch" ]; then
+					current_label="Erst nach Repo-Patch"
+				else
+					current_label="Direkt nach Checkout"
+				fi
+				patch_choice=$("$gui" "$st_" "$bt_" "$title_" "$nc_" --title "Speedy005 Metadaten-Patch" --menu "\n Aktuell: $current_label\n\nWann soll der Patch angewendet werden?" 12 58 2 "checkout" "Direkt nach Checkout" "after_repo_patch" "Erst nach Repo-Patch")
+				case "$patch_choice" in
+					checkout|after_repo_patch)
+						printf 'mode=%s\n' "$patch_choice" > "$configdir/speedy005_patch.conf"
+						"$gui" "$st_" "$bt_" "$title_" --infobox "\n Einstellung gespeichert." 5 38
+						sleep 1;;
+				esac
+				_select_menu;;
 		CEDIT)
 					s3cfg_menu
 					_select_menu;;

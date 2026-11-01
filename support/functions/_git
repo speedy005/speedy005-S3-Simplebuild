@@ -1,3 +1,69 @@
+_speedy005_is_repo(){
+        [ "$trunkurl" = "https://github.com/speedy005/oscam-git" ] &&
+        [ "${repodir##*/}" = "oscam-git" ]
+}
+
+_speedy005_patch_mode(){
+        local mode="checkout"
+        local cfg="$configdir/speedy005_patch.conf"
+        if [ -f "$cfg" ]; then
+                while IFS='=' read -r key value; do
+                        [ "$key" = "mode" ] && mode="$value"
+                done < "$cfg"
+        fi
+        case "$mode" in
+                checkout|after_repo_patch) printf '%s' "$mode" ;;
+                *) printf 'checkout' ;;
+        esac
+}
+
+_speedy005_apply_oscam_info_patch(){
+        _speedy005_is_repo || return 0
+        local patch_script="$workdir/support/speedy005_oscam_metadata_patch.py"
+        local state="$configdir/speedy005_patch.state"
+
+        if [ ! -f "$patch_script" ]; then
+                printf 'failed\\n' > "$state"
+                return 1
+        fi
+
+        if python3 "$patch_script" "$repodir" "$trunkurl"; then
+                printf 'applied\\n' > "$state"
+                return 0
+        fi
+
+        printf 'failed\\n' > "$state"
+        return 1
+}
+_speedy005_checkout_complete(){
+        _speedy005_is_repo || return 0
+        if [ "$(_speedy005_patch_mode)" = "checkout" ]; then
+                _speedy005_apply_oscam_info_patch
+        else
+                printf 'waiting
+' > "$configdir/speedy005_patch.state"
+        fi
+}
+
+_speedy005_repo_patch_result(){
+        _speedy005_is_repo || return 0
+        [ "$(_speedy005_patch_mode)" = "after_repo_patch" ] || return 0
+        case "$1" in
+                success) _speedy005_apply_oscam_info_patch ;;
+                failed) printf 'failed
+' > "$configdir/speedy005_patch.state" ;;
+        esac
+}
+
+_speedy005_build_fallback(){
+        _speedy005_is_repo || return 0
+        [ "$(_speedy005_patch_mode)" = "after_repo_patch" ] || return 0
+        local state="$configdir/speedy005_patch.state"
+        [ -f "$state" ] && [ "$(cat "$state")" = "failed" ] && return 0
+        [ -f "$state" ] && [ "$(cat "$state")" = "applied" ] && return 0
+        _speedy005_apply_oscam_info_patch
+}
+
 #!/bin/bash
 
 gitcheckout(){
@@ -23,6 +89,7 @@ gitcheckout(){
 	printf "\n$w_l  ${REPO^^} Checkout  : $y_l$([ "$commit" != "master" ] && printf "$(REFTYPE "$commit") $commit ..." || printf "$txt_latest ...")\n$re_"
 
 	gitclone "$commit"
+	_speedy005_checkout_complete
 
 	if [ -f "${repodir}/config.sh" ]
 	then
@@ -69,6 +136,7 @@ gitup(){
 		git clone -c advice.detachedHead=false --quiet --depth="${s3cfg_vars[GIT_CLONE_DEPTH]}" --branch "$branch" "$trunkurl" "${repodir}"
 	fi
 
+		_speedy005_checkout_complete
 	if [ -f "${repodir}/config.sh" ]
 	then
 		tput cup 10 2
@@ -95,6 +163,7 @@ _dialog_checkout1_git(){
 	fi
 
 	cd "$workdir" && gitclone "$commit"
+	_speedy005_checkout_complete
 	if [ -f "${repodir}/config.sh" ]
 	then
 		reset_="$("${repodir}/config.sh" -R)"

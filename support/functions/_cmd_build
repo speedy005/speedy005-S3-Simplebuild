@@ -3,6 +3,8 @@
 _cmd_build(){
 	[ ! -d "${repodir}" ] || [ -f "$workdir/NEED-CHECKOUT" ] && checkout
 
+	_speedy005_build_fallback
+
 	if [ "$_toolchainname" == "native" ]
 	then
 		log_name="$(date +%F).$(date +%H-%M-%S).$(hostname).log"

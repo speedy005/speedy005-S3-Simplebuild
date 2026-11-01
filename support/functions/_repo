@@ -120,8 +120,11 @@ repopatch(){
 
 		if [ "$(ls -A "$pdir"/${filter}.patch 2>/dev/null)" ]
 		then
+			local speedy005_emu_seen=0 speedy005_emu_ok=0 speedy005_emu_failed=0
 			for p in "${patchlist[@]}"
 			do
+				local_speedy005_target=0
+				[ "$p" = "oscam-emu.patch" ] && local_speedy005_target=1
 				PATCHSTYLE=$(_patch_style "$pdir/$p")
 				echo -e "\n$C ${PATCHSTYLE:1}-patch :  $p $force$W"; echo -e "\n$p" >> "$patchlog"
 				sleep .5
@@ -129,10 +132,27 @@ repopatch(){
 					cd "${repodir}"
 					echo -e $Y" binary patch detected, using 'git apply' <-"$W
 					export LC_ALL=C; git apply --verbose $PATCHSTYLE < "$pdir/$p" 2>&1 | tee -a "$patchlog" | sed -e "s/^Checking patch/$G checking > $WH/g;s/^Applied patch/$G patching > $WH/g;s/^Hunk/$P Hunk     > $Y/g;s/FAILED/$R FAILED/g; ;s/-- saving/$Y -- saving/g;"
+					patch_status=${PIPESTATUS[0]}
 				else
 					patch -d${repodir}/ $PATCHSTYLE < "$pdir/$p" | tee -a "$patchlog" | sed -e "s/^patching file/$G patching > $WH/g;s/^Hunk/$P Hunk     > $Y/g;s/FAILED/$R FAILED/g; ;s/-- saving/$Y -- saving/g;"
+					patch_status=${PIPESTATUS[0]}
+				fi
+				if [ "$local_speedy005_target" -eq 1 ]; then
+					speedy005_emu_seen=1
+					if [ "$patch_status" -eq 0 ]; then
+						speedy005_emu_ok=1
+					else
+						speedy005_emu_failed=1
+					fi
 				fi
 			done
+			if [ "$speedy005_emu_seen" -eq 1 ]; then
+				if [ "$speedy005_emu_ok" -eq 1 ] && [ "$speedy005_emu_failed" -eq 0 ]; then
+					_speedy005_repo_patch_result success
+				else
+					_speedy005_repo_patch_result failed
+				fi
+			fi
 
 			cat $patchlog >"$ldir/$e.log"
 			ln -frs "$ldir/$e.log" "$workdir/lastpatch.log"
