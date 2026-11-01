@@ -295,20 +295,87 @@ _select_menu(){
 					[ ! -z "$_rev" ] && check_url "$trunkurl" && _dialog_checkout1 "$_rev"
 					_select_menu;;
 		SPATCH)
-				current_mode="$(_speedy005_patch_mode)"
-				if [ "$current_mode" = "after_repo_patch" ]; then
-					current_label="Erst nach Repo-Patch"
-				else
-					current_label="Direkt nach Checkout"
-				fi
-				patch_choice=$("$gui" "$st_" "$bt_" "$title_" "$nc_" --title "Speedy005 Metadaten-Patch" --menu "\n Aktuell: $current_label\n\nWann soll der Patch angewendet werden?" 12 58 2 "checkout" "Direkt nach Checkout" "after_repo_patch" "Erst nach Repo-Patch")
-				case "$patch_choice" in
-					checkout|after_repo_patch)
-						printf 'mode=%s\n' "$patch_choice" > "$configdir/speedy005_patch.conf"
-						"$gui" "$st_" "$bt_" "$title_" --infobox "\n Einstellung gespeichert." 5 38
-						sleep 1;;
-				esac
-				_select_menu;;
+			branding_file="$workdir/support/configs/speedy005_branding.conf"
+			patch_script="$workdir/support/speedy005_oscam_metadata_patch.py"
+
+			camname="Oscam-Icam"
+			c_build="by speedy005"
+			html_build="- by speedy005"
+
+			if [ -f "$branding_file" ]; then
+				while IFS='=' read -r key value; do
+					case "$key" in
+						camname) camname="$value" ;;
+						c_build) c_build="$value" ;;
+						html_build) html_build="$value" ;;
+					esac
+				done < "$branding_file"
+			fi
+
+			spatch_choice=$("$gui" "$st_" "$bt_" "$title_" --title "Speedy005 Metadaten-Patch" --menu "\n Camname: $camname\n C-Build: $c_build\n HTML-Build: $html_build\n\nWas möchtest du ändern?" 17 72 5 \
+				"timing" "Zeitpunkt der Patch-Anwendung" \
+				"camname" "Camname in oscam.c" \
+				"cbuild" "Build-Text in oscam.c" \
+				"htmlbuild" "Build-Text in status.html" \
+				"nochange" "Nächsten Checkout ohne Änderungen")
+
+			case "$spatch_choice" in
+				nochange)
+					mkdir -p "$configdir"
+					: > "$configdir/speedy005_nochange_once"
+					"$gui" "$st_" "$bt_" "$title_" --msgbox "Der nächste Checkout erfolgt ohne automatische Speedy005-Anpassung.\n\nDie normale Patch-Zeitsteuerung bleibt danach erhalten." 9 68
+					;;
+				timing)
+					current_mode="$(_speedy005_patch_mode)"
+					if [ "$current_mode" = "after_repo_patch" ]; then
+						current_label="Erst nach Repo-Patch"
+					else
+						current_label="Direkt nach Checkout"
+					fi
+					patch_choice=$("$gui" "$st_" "$bt_" "$title_" --title "Patch-Zeitpunkt" --menu "\n Aktuell: $current_label\n\nWann soll der Patch angewendet werden?" 12 58 2 "checkout" "Direkt nach Checkout" "after_repo_patch" "Erst nach Repo-Patch")
+					case "$patch_choice" in
+						checkout|after_repo_patch)
+							printf 'mode=%s\n' "$patch_choice" > "$configdir/speedy005_patch.conf"
+							"$gui" "$st_" "$bt_" "$title_" --infobox "\n Einstellung gespeichert." 5 38
+							sleep 1;;
+					esac
+					;;
+
+				camname|cbuild|htmlbuild)
+					case "$spatch_choice" in
+						camname)
+							field_label="Camname"
+							current_value="$camname";;
+						cbuild)
+							field_label="Build-Text in oscam.c"
+							current_value="$c_build";;
+						htmlbuild)
+							field_label="Build-Text in status.html"
+							current_value="$html_build";;
+					esac
+
+					new_value=$("$gui" "$st_" "$bt_" "$title_" --title "$field_label" --inputbox "\nNeuen Wert eingeben:" 8 65 "$current_value")
+					dialog_status=$?
+
+					if [ "$dialog_status" -eq 0 ]; then
+						case "$spatch_choice" in
+							camname) camname="$new_value" ;;
+							cbuild) c_build="$new_value" ;;
+							htmlbuild) html_build="$new_value" ;;
+						esac
+
+						patch_output=$(python3 "$patch_script" "$repodir" "$trunkurl" set "$camname" "$c_build" "$html_build" 2>&1)
+						patch_status=$?
+
+						if [ "$patch_status" -eq 0 ]; then
+							"$gui" "$st_" "$bt_" "$title_" --msgbox "$patch_output" 10 70
+						else
+							"$gui" "$st_" "$bt_" "$title_" --msgbox "Fehler beim Anwenden:\n\n$patch_output" 12 70
+						fi
+					fi
+					;;
+			esac
+			_select_menu;;
 		CEDIT)
 					s3cfg_menu
 					_select_menu;;

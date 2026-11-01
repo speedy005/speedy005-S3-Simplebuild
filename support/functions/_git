@@ -37,16 +37,25 @@ _speedy005_apply_oscam_info_patch(){
 }
 _speedy005_checkout_complete(){
         _speedy005_is_repo || return 0
+        local nochange="$configdir/speedy005_nochange_once"
+
+        if [ -f "$nochange" ]; then
+                rm -f "$nochange"
+                printf 'skipped\\n' > "$configdir/speedy005_patch.state"
+                return 0
+        fi
+
         if [ "$(_speedy005_patch_mode)" = "checkout" ]; then
                 _speedy005_apply_oscam_info_patch
         else
-                printf 'waiting
-' > "$configdir/speedy005_patch.state"
+                printf 'waiting\\n' > "$configdir/speedy005_patch.state"
         fi
 }
 
 _speedy005_repo_patch_result(){
         _speedy005_is_repo || return 0
+        local state="$configdir/speedy005_patch.state"
+        [ -f "$state" ] && [ "$(cat "$state")" = "skipped" ] && return 0
         [ "$(_speedy005_patch_mode)" = "after_repo_patch" ] || return 0
         case "$1" in
                 success) _speedy005_apply_oscam_info_patch ;;
@@ -57,6 +66,8 @@ _speedy005_repo_patch_result(){
 
 _speedy005_build_fallback(){
         _speedy005_is_repo || return 0
+        local state="$configdir/speedy005_patch.state"
+        [ -f "$state" ] && [ "$(cat "$state")" = "skipped" ] && return 0
         [ "$(_speedy005_patch_mode)" = "after_repo_patch" ] || return 0
         local state="$configdir/speedy005_patch.state"
         [ -f "$state" ] && [ "$(cat "$state")" = "failed" ] && return 0
