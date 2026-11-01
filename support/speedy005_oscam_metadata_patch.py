@@ -27,7 +27,7 @@ config_dir = Path(__file__).resolve().parent / "configs"
 config_file = config_dir / "speedy005_branding.conf"
 
 defaults = {
-    "camname": "Oscam-Icam",
+    "camname": "OSCam-Icam",
     "c_build": "by speedy005",
     "html_build": "- by speedy005",
 }
@@ -102,7 +102,7 @@ def replace_info_block(match):
         f'{indent}}}',
         '',
         f'{indent}fprintf(fp, "Build Date:           am%s\\n", CS_BUILD_DATE);',
-        f'{indent}fprintf(fp, "Version:              {camname}-%s-build {c_build}\\n",',
+        f'{indent}fprintf(fp, "Version:              {camname} %s\\n",',
         f'{inner}CS_VERSION);',
         f'{indent}fprintf(fp, "S3 mit                -ggdb -pipe -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-schedule-insns\\n");',
         f'{indent}fprintf(fp, "compiler_option       -O2   \\n");',
@@ -172,7 +172,7 @@ if len(matches) != 1:
     )
 
 new_c = info_pattern.sub(replace_info_block, c, count=1)
-# Speedy005-Build-Anzeige nach Timeline einfügen oder vorhandenen Eintrag aktualisieren.
+# Speedy005-Build-Anzeige direkt vor Commit einfügen oder aktualisieren.
 marker_start = "<!-- SPEEDY005_BUILD_START -->"
 marker_end = "<!-- SPEEDY005_BUILD_END -->"
 
@@ -202,23 +202,44 @@ if marker_start in h or marker_end in h:
         count=1
     )
 else:
-    timeline_line = (
-        '<LI CLASS="configmenu"><A HREF="##SCM_URL##/commits/master" '
-        'TARGET="_blank">Timeline</A></LI>'
+    commit_line = (
+        '<LI CLASS="configmenu"><A HREF="##SCM_URL##/commit/##CS_GIT_COMMIT##" '
+        'TARGET="_blank">Commit</A></LI>'
     )
 
-    if h.count(timeline_line) != 1:
-        sys.exit("Abbruch: Timeline-Eintrag in status.html nicht eindeutig gefunden. Keine Dateien geändert.")
+    if h.count(commit_line) != 1:
+        sys.exit("Abbruch: Commit-Eintrag in status.html nicht eindeutig gefunden. Keine Dateien geändert.")
 
     new_h = h.replace(
-        timeline_line,
-        timeline_line + "\n" + branding_block,
+        commit_line,
+        branding_block + "\n" + commit_line,
         1
     )
     count_h = 1
 
 if count_h != 1:
     sys.exit("Abbruch: Speedy005-Build-Anzeige konnte nicht eindeutig aktualisiert werden.")
+
+# Vorhandenen Build-Block unabhängig von seiner bisherigen Position vor Commit verschieben.
+marker_pattern = re.compile(
+    re.escape(marker_start) + r".*?" + re.escape(marker_end),
+    re.DOTALL
+)
+new_h = marker_pattern.sub("", new_h, count=1)
+
+commit_line = (
+    '<LI CLASS="configmenu"><A HREF="##SCM_URL##/commit/##CS_GIT_COMMIT##" '
+    'TARGET="_blank">Commit</A></LI>'
+)
+
+if new_h.count(commit_line) != 1:
+    sys.exit("Abbruch: Commit-Eintrag in status.html nicht eindeutig gefunden. Keine Dateien geändert.")
+
+new_h = new_h.replace(
+    commit_line,
+    branding_block + "\n" + commit_line,
+    1
+)
 
 changed = []
 if new_c != c:
